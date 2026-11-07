@@ -1,0 +1,8 @@
+/target/
+/.worktrees/
+/.env*
+*.pem
+*.p8
+*developer-token*
+*.log
+/dist/
