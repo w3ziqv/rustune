@@ -6,11 +6,14 @@ pub struct Queue {
     pub current: Option<usize>,
     pub repeat: Repeat,
     pub shuffle: bool,
+    #[serde(default)]
+    pub revision: u64,
 }
 impl Queue {
     pub fn push(&mut self, t: Track) -> anyhow::Result<()> {
         anyhow::ensure!(self.tracks.len() < 10_000, "queue is full (10000 tracks)");
         self.tracks.push(t);
+        self.revision = self.revision.wrapping_add(1);
         Ok(())
     }
     pub fn remove(&mut self, i: usize) -> Option<Track> {
@@ -22,14 +25,20 @@ impl Queue {
             Some(c) if c > i => Some(c - 1),
             c => c,
         };
-        Some(self.tracks.remove(i))
+        let track = self.tracks.remove(i);
+        self.revision = self.revision.wrapping_add(1);
+        Some(track)
     }
     pub fn move_item(&mut self, from: usize, to: usize) -> bool {
         if from >= self.tracks.len() || to >= self.tracks.len() {
             return false;
         }
+        if from == to {
+            return true;
+        }
         let t = self.tracks.remove(from);
         self.tracks.insert(to, t);
+        self.revision = self.revision.wrapping_add(1);
         self.current = self.current.map(|i| {
             if i == from {
                 to
@@ -42,6 +51,12 @@ impl Queue {
             }
         });
         true
+    }
+    pub fn clear(&mut self) {
+        *self = Self {
+            revision: self.revision.wrapping_add(1),
+            ..Self::default()
+        };
     }
     pub fn candidate(&self, manual: bool) -> Option<usize> {
         let len = self.tracks.len();

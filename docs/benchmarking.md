@@ -65,3 +65,11 @@ bounded input reader and player/lyrics update: native TUI + service RSS 15,416
 KiB, PSS 7,260 KiB, zero additional CPU ticks over 5.00 seconds, first frame
 10.37 ms. Browser processes: zero. This is still an idle/no-audio measurement,
 not active native Apple Music playback. The real PTY Help/resize/quit checks passed.
+
+After the functional scrolling/queue fixes, the installed release binary repeated
+the isolated idle scenario: RSS 17,560 KiB, PSS 8,163 KiB, zero additional CPU
+ticks over 5.00 seconds, first frame 10.35 ms. All owned browser subprocesses:
+zero (RSS/PSS zero). This remains an idle/no-audio sample with a warm filesystem
+cache. The [machine-readable sample](validation/2026-11-08-idle.json) records the
+exact values; the separate online PTY scenario exercises real lyrics/artwork,
+but does not measure active streaming or native playback.

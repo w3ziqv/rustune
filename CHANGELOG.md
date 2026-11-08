@@ -14,6 +14,9 @@
 - MusicKit bitrate targets distinguished from unknown source quality.
 - Native playback is unavailable; default backend disabled with no browser fallback.
 - Explicit legacy Firefox/MusicKit and Chromium controllers retained.
+- Fixed immediate manual lyrics scrolling, including after terminal resizing.
+- Open queue follows external additions/reordering and returns to a valid page after shrink.
+- Reproducible isolated PTY functional smoke with public covers/lyrics and explicit no-audio scope.
 
 Earlier interactive verification completed a subscribed song using Firefox,
 not native playback. Updated-source checks are recorded in docs/validation.md.

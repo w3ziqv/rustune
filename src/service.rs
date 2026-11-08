@@ -24,6 +24,8 @@ use tokio::{
 pub struct Status {
     pub playback: Playback,
     pub queue_len: usize,
+    #[serde(default)]
+    pub queue_revision: u64,
     pub current: Option<usize>,
     pub repeat: Repeat,
     pub shuffle: bool,
@@ -147,6 +149,7 @@ impl Engine {
         Status {
             playback: self.playback.clone(),
             queue_len: self.queue.tracks.len(),
+            queue_revision: self.queue.revision,
             current: self.queue.current,
             repeat: self.queue.repeat,
             shuffle: self.queue.shuffle,
@@ -478,7 +481,7 @@ impl Engine {
                 if self.backend.pid().is_some() {
                     self.backend.execute("pause", Value::Null).await?;
                 }
-                self.queue = Queue::default();
+                self.queue.clear();
                 save = true;
             }
             Request::Theme(theme) => {

@@ -105,6 +105,9 @@ pub(super) fn cover_size(app: &App, size: Size) -> Option<Size> {
         .cover
         .map(|r| Size::new(r.width, r.height))
 }
+pub(super) fn lyrics_area(app: &App, size: Size) -> Rect {
+    areas(Rect::new(0, 0, size.width, size.height), art_enabled(app)).lyrics
+}
 
 pub(super) fn render(app: &App, f: &mut Frame, p: Palette) {
     let size = Size::new(f.area().width, f.area().height);
@@ -304,11 +307,13 @@ pub(super) fn render_lyrics(app: &App, f: &mut Frame, area: Rect, p: Palette) {
     let active_row = active
         .and_then(|index| wrapped.iter().position(|(line, _)| *line == index))
         .unwrap_or(0);
-    let range = visible_range(
-        app.lyrics_scroll.unwrap_or(active_row),
-        wrapped.len(),
-        area.height.saturating_sub(1) as usize,
-    );
+    let height = usize::from(area.height.saturating_sub(1));
+    let range = if let Some(top) = app.lyrics_scroll {
+        let top = top.min(wrapped.len().saturating_sub(height));
+        top..(top + height).min(wrapped.len())
+    } else {
+        visible_range(active_row, wrapped.len(), height)
+    };
     let rows: Vec<_> = range
         .map(|i| {
             let (line, text) = wrapped[i];

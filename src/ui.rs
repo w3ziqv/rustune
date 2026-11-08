@@ -202,6 +202,16 @@ impl App {
     pub fn accept_lyrics(&mut self, result: LyricsResult) {
         self.lyrics_result = Some(result);
     }
+    fn on_status(&mut self, status: Status) -> Option<Request> {
+        let changed = self.status.as_ref().is_none_or(|old| {
+            old.queue_revision != status.queue_revision
+                || old.queue_len != status.queue_len
+                || old.current != status.current
+                || old.pid != status.pid
+        });
+        self.status = Some(status);
+        (self.screen == 7 && changed).then(|| self.page_request())
+    }
     fn displayed_track(&self) -> Option<&Track> {
         if self.screen == 8 {
             self.inspected_track
@@ -255,8 +265,16 @@ impl App {
             );
         }
     }
-    fn page_request(&self) -> Request {
+    fn page_request(&mut self) -> Request {
         if self.screen == 7 {
+            if self
+                .status
+                .as_ref()
+                .is_some_and(|s| self.queue_offset >= s.queue_len)
+            {
+                self.queue_offset = 0;
+                self.selected = 0;
+            }
             Request::QueuePage {
                 offset: self.queue_offset,
             }
@@ -439,20 +457,23 @@ impl App {
             if let Some(lyrics::LyricsState::Found(lyrics)) =
                 self.lyrics_result.as_ref().map(|r| &r.state)
             {
-                let area = player::areas(
-                    Rect::new(0, 0, self.viewport.width, self.viewport.height),
-                    self.config.artwork,
-                )
-                .lyrics;
+                let area = player::lyrics_area(self, self.viewport);
                 let rows = player::lyric_rows(lyrics, area.width);
-                let current = self.lyrics_scroll.unwrap_or_else(|| {
-                    lyrics
-                        .active_line(self.displayed_position())
-                        .and_then(|index| rows.iter().position(|(line, _)| *line == index))
-                        .unwrap_or(0)
-                });
+                let height = usize::from(area.height.saturating_sub(1));
+                let current = self
+                    .lyrics_scroll
+                    .unwrap_or_else(|| {
+                        let active = lyrics
+                            .active_line(self.displayed_position())
+                            .and_then(|index| rows.iter().position(|(line, _)| *line == index))
+                            .unwrap_or(0);
+                        visible_range(active, rows.len(), height).start
+                    })
+                    .min(rows.len().saturating_sub(height));
                 self.lyrics_scroll = Some(if action == Some("down") {
-                    current.saturating_add(1).min(rows.len().saturating_sub(1))
+                    current
+                        .saturating_add(1)
+                        .min(rows.len().saturating_sub(height))
                 } else {
                     current.saturating_sub(1)
                 });
@@ -1118,7 +1139,14 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                     if app.screen==7 && !matches!(r,Request::QueuePage{..}){let _=jobs.try_send(app.page_request());}},Err(e)=>app.note=e.to_string()}
 
                 }
-                Some(update)=status.recv()=>{match update{Ok(s)=>{app.status=Some(s);},Err(_)=>app.note="Service disconnected. Quit and reopen Rustune to reconnect.".into()}}
+                Some(update) = status.recv() => match update {
+                    Ok(s) => {
+                        if let Some(r) = app.on_status(s) && jobs.try_send(r).is_err() {
+                            app.note = "Command queue is full; reopen Queue to refresh.".into();
+                        }
+                    },
+                    Err(_) => app.note = "Service disconnected. Quit and reopen Rustune to reconnect.".into(),
+                }
             }
         }Ok::<(),anyhow::Error>(())
     }.await;
@@ -1136,6 +1164,118 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
 #[cfg(test)]
 mod login_tests {
     use super::*;
+    #[test]
+    fn external_queue_reorder_requests_one_refresh_without_a_status_feedback_loop() {
+        let mut app = App::new(Config::default());
+        app.screen = 7;
+        let value = |revision| serde_json::json!({"playback":{},"queue_len":30,"current":0,"repeat":"off","shuffle":false,"profile":"balanced","pid":1,"browser_pid":null,"backend":"test","playback_available":false,"browser_shared":false,"uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null,"queue_revision":revision});
+        app.on_status(serde_json::from_value(value(0)).unwrap());
+        let changed: Status = serde_json::from_value(value(1)).unwrap();
+        assert!(
+            matches!(
+                app.on_status(changed.clone()),
+                Some(Request::QueuePage { offset: 0 })
+            ),
+            "same-length external reorders must refresh visible items"
+        );
+        assert!(
+            app.on_status(changed).is_none(),
+            "the refresh status response must not trigger another refresh"
+        );
+        app.queue_offset = 25;
+        let mut shrunk = value(2);
+        shrunk["queue_len"] = 3.into();
+        assert!(
+            matches!(
+                app.on_status(serde_json::from_value(shrunk).unwrap()),
+                Some(Request::QueuePage { offset: 0 })
+            ),
+            "removing the current page must return to a valid queue page"
+        );
+    }
+    #[test]
+    fn first_manual_lyric_scroll_moves_the_visible_text() {
+        let mut app = App::new(Config::default());
+        app.screen = 7;
+        app.viewport = Size::new(142, 39);
+        app.accept(&Request::QueuePage{offset:0},serde_json::json!({"items":[{"id":"fixture","title":"Our song","artist":"Our artist"}]})).unwrap();
+        app.key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('l'),
+            KeyModifiers::NONE,
+        ))
+        .unwrap();
+        let text = (0..80)
+            .map(|i| format!("Preview line {i:02}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let lyrics = lyrics::Lyrics::parse(Some(&text), None, false).unwrap();
+        app.accept_lyrics(LyricsResult {
+            request: app.lyrics_request().unwrap(),
+            state: lyrics::LyricsState::Found(std::sync::Arc::new(lyrics)),
+        });
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(142, 39)).unwrap();
+        t.draw(|f| app.render(f)).unwrap();
+        let before: String = t
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(before.contains("Preview line 00"));
+        app.key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('j'),
+            KeyModifiers::NONE,
+        ))
+        .unwrap();
+        t.draw(|f| app.render(f)).unwrap();
+        let after: String = t
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(
+            !after.contains("Preview line 00"),
+            "the first j should move the top lyric row"
+        );
+        app.key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('k'),
+            KeyModifiers::NONE,
+        ))
+        .unwrap();
+        t.draw(|f| app.render(f)).unwrap();
+        let back: String = t
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(back.contains("Preview line 00"));
+        for _ in 0..80 {
+            app.key(crossterm::event::KeyEvent::new(
+                KeyCode::Char('j'),
+                KeyModifiers::NONE,
+            ))
+            .unwrap();
+        }
+        app.viewport = Size::new(142, 48);
+        t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(142, 48)).unwrap();
+        t.draw(|f| app.render(f)).unwrap();
+        let bottom = t.backend().buffer().clone();
+        app.key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('k'),
+            KeyModifiers::NONE,
+        ))
+        .unwrap();
+        t.draw(|f| app.render(f)).unwrap();
+        assert!(
+            &bottom != t.backend().buffer(),
+            "the first k after increasing viewport height must move visible lyrics"
+        );
+    }
     #[test]
     fn selected_queue_song_can_open_lyrics_without_a_playback_backend() {
         let mut app = App::new(Config::default());

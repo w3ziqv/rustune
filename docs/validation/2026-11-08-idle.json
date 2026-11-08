@@ -1,0 +1,16 @@
+{
+  "scenario": "isolated idle TUI + service, balanced, no playback engine",
+  "native_rss_kib": 17560,
+  "native_pss_kib": 8163,
+  "native_cpu_percent_one_core": 0.0,
+  "sample_seconds": 5.000383220000003,
+  "first_tui_frame_ms": 10.346326000217232,
+  "cold_cache": false,
+  "browser_processes": 0,
+  "browser_rss_kib": 0,
+  "browser_pss_kib": 0,
+  "help": true,
+  "resizes": 4,
+  "quit_exit": 0,
+  "audio_tested": false
+}
