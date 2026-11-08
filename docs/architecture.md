@@ -57,6 +57,22 @@ Modules: `model`, `queue`, `config`, `cache`, `ipc`, `service`, `backend`,
 `keys`, `ui`, `mpris`, `metrics`. Application Rust forbids unsafe code. The small
 `command-fds` dependency handles descriptor mapping for Chromium's fd 3 and 4.
 
+Local token login is independent of playback service IPC. CLI entry runs before
+starting a service; TUI entry uses a separate local storage worker. SecretToken
+has redacted Debug, no serialization and zeroized owned buffers. A bounded input
+parser reads cloned stdin through private descriptors: 512-byte read blocks,
+16 KiB bracketed paste, 64-byte escape sequences, a one-event channel and a private
+UnixStream pair for immediate reader shutdown. Oversized paste is drained through
+its closing marker and rejected, never accepted as a truncated token. No public
+listener or unsafe application code is involved. CLI raw mode precedes the prompt;
+guards restore the terminal on errors and cancellation. These are application
+buffer protections, not a claim about kernel, terminal or filesystem cache wiping.
+
+The LRCLIB worker is independent of authorization and browser automation. It sends
+only track metadata, keeps one latest request, enforces HTTP/cache/text limits and
+rejects stale results. See lyrics.md. The dedicated player module owns geometry,
+metadata, wrapped synchronized text, progress and mouse/keyboard controls.
+
 ## Artwork and quality
 
 The terminal client owns a lazy image worker, separate from the playback service.

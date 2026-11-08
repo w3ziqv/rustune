@@ -217,7 +217,9 @@ impl PlaybackBackend for MusicKit {
         let v = r?;
         if let Some(code) = v.get("error").and_then(Value::as_str) {
             match code {
-                "unauthorized" => bail!("sign in first: rustune login"),
+                "unauthorized" => {
+                    bail!("authorize the configured legacy backend: rustune login --browser")
+                }
                 "preview" => bail!(
                     "full-song playback unavailable; previews are disabled (check subscription/DRM)"
                 ),

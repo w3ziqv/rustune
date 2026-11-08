@@ -109,7 +109,7 @@ impl Engine {
     fn new(config: Config, paths: Paths) -> Result<Self> {
         let p = paths.data.join("state.json");
         let mut saved = SavedState::default();
-        let mut message = "Ready. / to search • :login to authorize".to_owned();
+        let mut message = "Ready. L saves a local token • :connect-browser authorizes the optional browser backend".to_owned();
         if config.restore_queue && p.exists() {
             match (||->Result<SavedState>{
                 ensure!(fs::metadata(&p)?.len()<=16*1024*1024,"saved state exceeds limit");
@@ -207,7 +207,7 @@ impl Engine {
                 self.backend.close().await;
                 self.playback.playing = false;
                 self.message =
-                    "Browser disconnected. Use Play to reconnect; :login if authorization expired."
+                    "Browser disconnected. Use Play to reconnect; :connect-browser if authorization expired."
                         .into();
                 return Ok(());
             }
@@ -324,7 +324,7 @@ impl Engine {
                 self.backend.execute("logout", Value::Null).await?;
                 self.backend.close().await;
                 self.playback = Playback::default();
-                self.message = "Signed out of MusicKit. Use :login to authorize again.".into();
+                self.message = "Signed out of MusicKit. Use :connect-browser to authorize the optional backend again.".into();
             }
             Request::Play | Request::Toggle if !self.playback.playing => {
                 if self.backend.pid().is_none()

@@ -45,10 +45,16 @@ enum Commands {
     },
     /// Run the private playback service in the foreground
     Daemon,
-    /// Connect your existing Firefox Apple Music session (or authorize configured backend)
-    Login,
-    /// Revoke MusicKit authorization in the dedicated browser profile
-    Logout,
+    /// Enter a Music User Token privately; --browser explicitly authorizes the legacy backend
+    Login {
+        #[arg(long)]
+        browser: bool,
+    },
+    /// Remove the saved local Music User Token; --browser revokes legacy MusicKit authorization
+    Logout {
+        #[arg(long)]
+        browser: bool,
+    },
     /// Print current service state as JSON
     Status,
     /// Send a terminal/SSH control: play, pause, toggle, next, previous, mute, seek, volume, shuffle, repeat, sleep, clear, stop
@@ -85,6 +91,13 @@ async fn main() -> Result<()> {
     let paths = Paths::discover()?;
     let config = Config::load(&paths)?;
     match cli.command {
+        Some(Commands::Login { browser: false }) => rustune::auth::prompt_login(&paths)?,
+        Some(Commands::Logout { browser: false }) => {
+            rustune::auth::remove_user_token(&paths)?;
+            println!(
+                "Local Music User Token removed. Browser/account authorization was not changed."
+            );
+        }
         Some(Commands::NativeHost { browser_args }) => {
             rustune::backend::firefox::native_host(paths, &browser_args).await?
         }
@@ -153,8 +166,8 @@ async fn main() -> Result<()> {
             let mut child = ensure_service(&paths).await?;
             if let Some(command) = command {
                 let request = match command {
-                    Commands::Login => Request::Login,
-                    Commands::Logout => Request::Logout,
+                    Commands::Login { browser: true } => Request::Login,
+                    Commands::Logout { browser: true } => Request::Logout,
                     Commands::Status => Request::Status,
                     Commands::Ctl { action, value } => control(&action, value.as_deref())?,
                     Commands::Search { term, kind } => Request::Browse {
@@ -270,7 +283,7 @@ async fn doctor(config: &Config, paths: &Paths) -> Result<()> {
     println!(
         "Music User Token: {}",
         if paths.config.join("music-user-token").exists() {
-            "separate file present; not a developer token; not imported into MusicKit"
+            "local file present; account acceptance not verified; separate from developer JWT"
         } else {
             "managed by official browser sign-in"
         }
@@ -330,7 +343,7 @@ async fn doctor(config: &Config, paths: &Paths) -> Result<()> {
         }
     );
     println!(
-        "Audio: Auto only; codec/bitrate/bit-depth unknown; lossless/DSP/lyrics/visualizer unavailable"
+        "Audio: Auto only; codec/bitrate/bit-depth unknown; free LRCLIB lyrics enabled; lossless/DSP/visualizer unavailable"
     );
     if let Ok(v) = ipc::request(paths, &Request::Status).await {
         let s: Status = serde_json::from_value(v)?;

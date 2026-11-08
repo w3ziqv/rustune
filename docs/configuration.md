@@ -15,6 +15,7 @@ backend = "disabled"
 performance = "balanced"
 theme = "monochrome"
 artwork = true
+lyrics = true
 artwork_protocol = "auto"
 volume = 0.7
 daemon = false
@@ -85,3 +86,15 @@ are persisted atomically in `state.json`; restoration does not auto-play audio.
 Invalid TOML, unknown keys, out-of-range values and oversized files produce an
 error and preserve the original file. Rustune does not overwrite invalid config
 with defaults. Logs are opt-in and contain no credentials or raw CDP expressions.
+
+
+Token entry: `rustune login` or TUI `L` / `:login` saves a Music User Token locally.
+`rustune logout` / `:logout` removes it. Storage is private and unverified; no
+native playback engine or browser authorization is implied. For the explicit
+legacy controller use `rustune login --browser` / `:connect-browser`.
+
+`lyrics = true` enables lazy anonymous LRCLIB lookup when Now Playing or Lyrics
+is visible. It sends only song metadata, honors service throttling and caches a
+bounded number of records according to the profile. R requests a fresh lookup;
+`lyrics = false` prevents new lookups. Artwork rendering is capped to 96 × 48
+terminal cells; the source download/decode still follows the profile pixel limit.

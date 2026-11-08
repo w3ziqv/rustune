@@ -11,8 +11,8 @@ Local validation on Arch Linux x86_64, stable Rust 1.99.1:
 
 - `cargo fmt --all -- --check`: passed.
 - `cargo clippy --all-targets -- -D warnings`: passed.
-- `cargo test`: 36 tests passed; three browser smoke tests and one network
-  artwork smoke test are opt-in and excluded from the normal suite.
+- `cargo test`: 53 tests passed; six opt-in browser/network/visual tests are
+  excluded from the normal suite.
 - `cargo build --release`: passed; `cargo build --profile compact`: passed.
 - `cargo audit`: no reported vulnerabilities or advisory warnings in this lockfile.
 - `rustup check`: stable 1.99.1 up to date; `cargo update --dry-run`: zero updates
@@ -36,6 +36,25 @@ geometry is verified; it is not advertised as supported.
 An independent review found Sixel geometry overflow and misleading disabled-mode
 capabilities. Both were fixed with failing-then-passing regressions and reviewed
 again. Source/history checks found no supplied-token or private-key matches.
+
+The token/lyrics/layout update adds real CLI and TUI PTY tests using artificial
+tokens in isolated XDG directories: hidden input, terminal echo disabled before
+the prompt, private storage, cancellation and no token in screen buffers/IPC.
+An independent review identified an echo race, upstream unbounded paste buffering
+and obsolete login hints. Fixes use Rustune's bounded raw-input parser/private
+wakeup pipe, enable raw mode before the prompt and distinguish local token storage
+from browser connection. A one-million-byte/unterminated paste test verifies the
+16 KiB parser bound and rejects partial credentials. Ctrl-C cancels incomplete
+sequences. Source has no unsafe application code.
+
+Lyrics tests cover multiple timestamps, offsets, safe text, plain/instrumental
+states, real HTTP contracts, matching, response limits and Retry-After. A separate
+real LRCLIB lookup returned 37 synchronized lines for the user-referenced song;
+its text was withheld from output. Wrapping/scrolling and stale lyrics/cover
+rendering have regression coverage. A 142×39 actual Ratatui buffer was visually
+inspected with public Apple artwork, synthetic lyrics and an explicit no-audio
+preview label. A missing artwork upscale found by visual inspection was fixed
+with a RED→GREEN encoded-cell-size regression.
 
 ## Earlier interactive browser verification
 

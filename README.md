@@ -56,6 +56,22 @@ rustune
 Add `~/.local/bin` to PATH if needed. The current minimum Rust version is 1.99; the toolchain is pinned to 1.99.1.
 See [installation](docs/installation.md).
 
+## Token login
+
+Run `rustune login`, paste your **Music User Token** into the hidden prompt, and
+press Enter. In the TUI, press `L` or enter `:login`. Esc cancels; Ctrl-U clears.
+The token is saved atomically to `~/.config/rustune/music-user-token` with mode
+0600. It never enters command arguments, command history or service IPC.
+`rustune logout` / `:logout` remove this local file.
+
+**This implements local credential entry/storage, not verified account sign-in
+or native playback.** The outcome says account acceptance is unverified; the
+native Linux DRM engine is still unavailable. No browser fallback is started.
+
+The main player follows the selected amcli-style composition: large album cover
+left, metadata and centered lyrics right, progress and bordered controls below.
+Tab opens navigation. Existing black/white and optional theme choices remain.
+
 ## Optional legacy Firefox setup
 
 These steps explicitly select browser playback; they do not provide native playback.
@@ -66,14 +82,16 @@ These steps explicitly select browser playback; they do not provide native playb
    and select `~/.local/share/rustune/firefox/manifest.json`. Ctrl+L in the file
    picker accepts its absolute path. Allow access to the Apple Music host when
    prompted.
-4. Run `rustune login`, then `rustune`.
+4. Run `rustune login --browser`, then `rustune`.
 
 The development add-on is removed by Firefox restart. A permanent add-on needs
 Mozilla signing; signing enforcement is never disabled. After updating add-on
 files, use **Reload** on its debugging card. Click its toolbar action to reconnect
 if the pinned music tab was closed. See [Firefox details](docs/firefox.md).
 
-A manually supplied Music User Token is not required or imported. For the
+The optional browser controllers keep their own official authorization.
+`rustune login --browser` or `:connect-browser` explicitly connects them; local
+token login does not. For the
 optional `music_kit` backend, a MusicKit **developer JWT** is a separate credential
 stored privately at `~/.config/rustune/developer-token` with mode 0600. Follow
 [Apple's token documentation](https://developer.apple.com/documentation/applemusicapi/generating-developer-tokens);
@@ -94,7 +112,9 @@ never put a private key or Apple ID password in the repository or chat.
 | Delete, J / K | Remove / reorder queue item |
 | PgDn | Next result/queue page |
 | s / r | Shuffle / repeat |
-| e / l / v | EQ / lyrics / visualizer capability explanation |
+| L | Hidden local token login |
+| l / R | Lyrics / reload lyrics |
+| e / v | EQ / visualizer capability explanation |
 | , / ? | Settings / Help |
 | : | Command palette |
 | q, Ctrl-C | Quit terminal client |
@@ -130,6 +150,7 @@ backend = "disabled"
 performance = "balanced"
 theme = "monochrome"
 artwork = true
+lyrics = true
 artwork_protocol = "auto"
 volume = 0.7
 daemon = true
@@ -163,8 +184,15 @@ Lossless/Hi-Res Lossless and explicit quality presets are disabled. PipeWire's
 output format does not establish the source encoding. MusicKit targets of 64/256
 kb/s are labeled as targets, never measured source bitrate.
 
-EQ, preamp, bass/treble, normalization, crossfade, gapless guarantees, synchronized
-lyrics and a real visualizer are not implemented. Their screens explain why.
+EQ, preamp, bass/treble, normalization, crossfade, gapless guarantees
+and a real visualizer are not implemented. Their screens explain why.
+
+Free LRCLIB lyrics work without an API key. Requests send the track title, artist,
+album and duration to LRCLIB, never Apple credentials. Synced LRC follows reported
+playback position; plain-text and instrumental records have distinct states.
+Lyrics wrap, scroll and use a bounded cache. `lyrics = false` disables lookup.
+Coverage depends on LRCLIB; no match is reported honestly, never substituted with
+a different song. See [lyrics details](docs/lyrics.md).
 Real artwork is rendered lazily from Apple image hosts when the connected backend
 reports its URL. No generated artwork is substituted. `auto` uses portable
 halfblocks; image protocols can be selected explicitly.

@@ -13,11 +13,11 @@ categories = ["command-line-utilities", "multimedia::audio"]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 command-fds = "0.3.3"
-crossterm = { version = "0.29", features = ["event-stream"] }
+crossterm = "0.29"
 fastrand = "2"
-futures-util = { version = "0.3", default-features = false, features = ["std"] }
-nix = { version = "0.31", features = ["signal", "process", "fs"] }
+nix = { version = "0.31", features = ["signal", "process", "fs", "user", "poll"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
+httpdate = "1.0.3"
 ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm"] }
@@ -28,6 +28,8 @@ toml = "1.2.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 zbus = { version = "6.2.1", default-features = false, features = ["tokio", "service", "proxy"] }
+zeroize = "1.9.1"
+unicode-width = "0.2.3"
 
 [dev-dependencies]
 tempfile = "3"

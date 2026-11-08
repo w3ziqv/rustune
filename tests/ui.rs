@@ -58,7 +58,7 @@ fn playing_app() -> rustune::ui::App {
     let mut app = rustune::ui::App::new(rustune::config::Config::default());
     app.screen = 1;
     app.status = Some(serde_json::from_value(serde_json::json!({
-        "playback":{"track":{"id":"song","title":"A song","artwork":"https://is1-ssl.mzstatic.com/a/{w}x{h}.jpg"}},
+        "playback":{"track":{"id":"song","title":"A song","artist":"Our Artist","artwork":"https://is1-ssl.mzstatic.com/a/{w}x{h}.jpg"}},
         "queue_len":1,"current":0,"repeat":"off","shuffle":false,"profile":"balanced",
         "pid":1,"browser_pid":null,"backend":"native","browser_shared":false,
         "uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null
@@ -113,4 +113,67 @@ fn artwork_is_lazy_disabled_for_minimal_and_stale_results_are_ignored() {
     );
     app.status.as_mut().unwrap().profile = PerformanceMode::Minimal;
     assert!(app.artwork_request(size).is_none());
+}
+
+#[test]
+fn primary_player_has_large_artwork_and_centered_synced_lyrics_on_the_right() {
+    use ratatui::{Terminal, backend::TestBackend, layout::Size, style::Modifier};
+    use rustune::lyrics::{Lyrics, LyricsResult, LyricsState};
+    let mut app = playing_app();
+    app.status.as_mut().unwrap().playback.position = 2.0;
+    assert_eq!(rustune::ui::App::new(Default::default()).screen, 1);
+    let size = Size::new(142, 39);
+    let cover = app.artwork_request(size).unwrap();
+    assert!(cover.size.width >= 48 && cover.size.height >= 24);
+    let request = app.lyrics_request().unwrap();
+    let lyrics = Lyrics::parse(
+        None,
+        Some("[00:01.00]Our opening line\n[00:02.00]Our current line\n[00:03.00]Our next line"),
+        false,
+    )
+    .unwrap();
+    app.accept_lyrics(LyricsResult {
+        request,
+        state: LyricsState::Found(std::sync::Arc::new(lyrics)),
+    });
+    let mut t = Terminal::new(TestBackend::new(142, 39)).unwrap();
+    t.draw(|f| app.render(f)).unwrap();
+    let b = t.backend().buffer();
+    let mut found = false;
+    for y in 0..39 {
+        let text: String = (70..142).map(|x| b[(x, y)].symbol()).collect();
+        if text.contains("Our current line") {
+            found = true;
+            assert!((70..142).any(|x| b[(x, y)].modifier.contains(Modifier::BOLD)));
+        }
+    }
+    assert!(found, "lyrics should be beside the cover");
+    app.status
+        .as_mut()
+        .unwrap()
+        .playback
+        .track
+        .as_mut()
+        .unwrap()
+        .id = "different".into();
+    app.status
+        .as_mut()
+        .unwrap()
+        .playback
+        .track
+        .as_mut()
+        .unwrap()
+        .title = "Different song".into();
+    t.draw(|f| app.render(f)).unwrap();
+    let all: String = t
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(
+        !all.contains("Our current line"),
+        "stale lyrics must not render for another song"
+    );
 }

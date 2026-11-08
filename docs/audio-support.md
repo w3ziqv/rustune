@@ -14,7 +14,8 @@
 | Output device | Explicit legacy browser backend uses its system audio device |
 | EQ, presets, preamp, bass, treble, normalization | Disabled; no verified protected PCM access |
 | Crossfade / gapless | Not implemented or guaranteed |
-| Synchronized lyrics / visualizer | Unavailable; no fabricated data |
+| Lyrics | Free LRCLIB lookup, synchronized LRC/plain text/instrumental states, wrapped scrolling |
+| Visualizer | Unavailable; no fabricated audio data |
 | Artwork | Real lazy covers; bounded cache; halfblocks or explicit Kitty/iTerm2 protocol |
 
 PipeWire/WirePlumber can route and process the browser's output. Rustune does not

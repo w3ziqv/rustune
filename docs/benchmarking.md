@@ -56,3 +56,12 @@ subprocesses are included; shared Firefox includes the user's full process tree.
 Membership refreshes each second and at completion. Short-lived processes exiting
 between samples can be missed, making CPU under churn a lower bound. Missing PSS
 reads are reported as unknown, never replaced with a guessed PSS.
+
+
+## Token/lyrics/player update
+
+Repeated isolated balanced idle measurement after the hidden token prompt,
+bounded input reader and player/lyrics update: native TUI + service RSS 15,416
+KiB, PSS 7,260 KiB, zero additional CPU ticks over 5.00 seconds, first frame
+10.37 ms. Browser processes: zero. This is still an idle/no-audio measurement,
+not active native Apple Music playback. The real PTY Help/resize/quit checks passed.

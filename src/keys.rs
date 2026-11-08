@@ -18,6 +18,8 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("equalizer", "e"),
     ("visualizer", "v"),
     ("lyrics", "l"),
+    ("login", "L"),
+    ("lyrics_refresh", "R"),
     ("settings", ","),
     ("help", "?"),
     ("command", ":"),

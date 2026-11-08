@@ -12,7 +12,7 @@ closes your browser or kills its processes.
    setup, normally `~/.local/share/rustune/firefox/manifest.json`. In the file
    picker, Ctrl+L accepts an absolute path even though `.local` is hidden.
 4. Allow the extension's requested access to `music.apple.com` if prompted.
-5. Keep your signed-in Apple Music tab open and run `rustune login`, then
+5. Keep your signed-in Apple Music tab open and run `rustune login --browser`, then
    `rustune`. A previously running Rustune daemon needs restarting after changing
    backend settings (`rustune ctl stop`).
 

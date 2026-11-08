@@ -1,10 +1,13 @@
 #![cfg(target_os = "linux")]
 pub mod artwork;
+pub mod auth;
 pub mod backend;
 pub mod cache;
 pub mod config;
+pub mod input;
 pub mod ipc;
 pub mod keys;
+pub mod lyrics;
 pub mod metrics;
 pub mod model;
 pub mod mpris;

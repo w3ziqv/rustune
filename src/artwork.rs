@@ -72,6 +72,7 @@ async fn fetch(client: &reqwest::Client, template: &str, pixels: u32) -> Result<
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct CoverRequest {
+    pub size: Size,
     pub url: String,
     pub profile: PerformanceMode,
     pub protocol: String,
@@ -83,6 +84,10 @@ pub struct CoverResult {
 }
 
 fn encode(image: DynamicImage, request: &CoverRequest) -> Result<Protocol> {
+    ensure!(
+        (1..=96).contains(&request.size.width) && (1..=48).contains(&request.size.height),
+        "artwork cell area exceeds limit"
+    );
     let mut picker = Picker::halfblocks();
     let protocol = match request.protocol.as_str() {
         "kitty" => ProtocolType::Kitty,
@@ -93,7 +98,14 @@ fn encode(image: DynamicImage, request: &CoverRequest) -> Result<Protocol> {
     picker.set_protocol_type(protocol);
     let [r, g, b] = request.background;
     picker.set_background_color(Some(image::Rgba([r, g, b, 255])));
-    Ok(picker.new_protocol(image, COVER_SIZE, Resize::Fit(None))?)
+    // Picker fits without upscaling; enlarge to the bounded terminal cell target
+    // first so low-resolution Apple covers still fill the selected layout.
+    let image = image.resize(
+        u32::from(request.size.width) * 10,
+        u32::from(request.size.height) * 20,
+        image::imageops::FilterType::Nearest,
+    );
+    Ok(picker.new_protocol(image, request.size, Resize::Fit(None))?)
 }
 
 /// At most one fetch/decode runs and one latest request waits. Cache encoded
@@ -162,4 +174,21 @@ pub fn worker() -> (
         }
     });
     (requests, results, task)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn cover_encoding_fills_the_requested_cell_area_even_for_small_source_images() {
+        let request = CoverRequest {
+            size: Size::new(58, 29),
+            url: String::new(),
+            profile: PerformanceMode::Balanced,
+            protocol: "halfblocks".into(),
+            background: [0, 0, 0],
+        };
+        let encoded = encode(DynamicImage::new_rgb8(64, 64), &request).unwrap();
+        assert_eq!(encoded.size(), Size::new(58, 29));
+    }
 }

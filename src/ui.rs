@@ -1,27 +1,29 @@
 //! Event-driven terminal client. Only visible rows are constructed.
+mod player;
 use crate::{
     artwork::{self, CoverRequest, CoverResult},
+    auth::{self, LocalAuth, TokenInput},
     config::{Config, Paths, PerformanceMode},
+    input::{Events, InputEvent as Event},
     ipc::{self, Request},
     keys,
+    lyrics::{self, LyricsQuery, LyricsRequest, LyricsResult},
     model::{Page, Track},
     service::{Reply, Status},
 };
 use anyhow::{Context, Result};
 use crossterm::{
     event::{
-        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyModifiers,
-        MouseButton, MouseEventKind,
+        DisableMouseCapture, EnableMouseCapture, KeyCode, KeyModifiers, MouseButton, MouseEventKind,
     },
     execute,
 };
-use futures_util::StreamExt;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect, Size},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Gauge, List, ListItem, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Gauge, List, ListItem, Padding, Paragraph, Wrap},
 };
 use std::{
     io::{IsTerminal, stdout},
@@ -113,16 +115,23 @@ pub struct App {
     note: String,
     busy: bool,
     cover: Option<CoverResult>,
+    token_input: Option<TokenInput>,
+    auth_job: Option<LocalAuth>,
+    token_stored: bool,
+    lyrics_result: Option<LyricsResult>,
+    lyrics_generation: u64,
+    lyrics_scroll: Option<usize>,
+    viewport: Size,
 }
 impl App {
     pub fn new(config: Config) -> Self {
         Self {
             config,
             status: None,
-            screen: 0,
+            screen: 1,
             selected: 0,
             sidebar: false,
-            nav: 0,
+            nav: 1,
             items: Vec::new(),
             next: None,
             queue_offset: 0,
@@ -134,6 +143,13 @@ impl App {
             note: "/ Search • ? Help • :audio Playback capabilities".into(),
             busy: false,
             cover: None,
+            token_input: None,
+            auth_job: None,
+            token_stored: false,
+            lyrics_result: None,
+            lyrics_generation: 0,
+            lyrics_scroll: None,
+            viewport: Size::new(100, 30),
         }
     }
     pub fn artwork_request(&self, size: Size) -> Option<CoverRequest> {
@@ -141,13 +157,16 @@ impl App {
             .status
             .as_ref()
             .map_or(self.config.performance, |s| s.profile);
-        if !self.config.artwork
-            || profile.limits().artwork_entries == 0
-            || !((self.screen == 1 && size.width >= 80 && size.height >= 23)
-                || (self.screen != 1 && size.width >= 130 && size.height >= 28))
-        {
+        if !self.config.artwork || profile.limits().artwork_entries == 0 {
             return None;
         }
+        let cover_size = if matches!(self.screen, 1 | 8) && !self.sidebar {
+            player::cover_size(self, size)?
+        } else if !matches!(self.screen, 1 | 8) && size.width >= 130 && size.height >= 28 {
+            artwork::COVER_SIZE
+        } else {
+            return None;
+        };
         let url = self
             .status
             .as_ref()?
@@ -162,6 +181,7 @@ impl App {
             _ => [0, 0, 0],
         };
         Some(CoverRequest {
+            size: cover_size,
             url,
             profile,
             protocol: self.config.artwork_protocol.clone(),
@@ -170,6 +190,21 @@ impl App {
     }
     pub fn accept_artwork(&mut self, cover: CoverResult) {
         self.cover = Some(cover);
+    }
+    pub fn lyrics_request(&self) -> Option<LyricsRequest> {
+        if !self.config.lyrics || !matches!(self.screen, 1 | 8) {
+            return None;
+        }
+        let status = self.status.as_ref()?;
+        let mut query = LyricsQuery::from_track(status.playback.track.as_ref()?)?;
+        query.generation = self.lyrics_generation;
+        Some(LyricsRequest {
+            query,
+            profile: status.profile,
+        })
+    }
+    pub fn accept_lyrics(&mut self, result: LyricsResult) {
+        self.lyrics_result = Some(result);
     }
     fn render_cover(&self, f: &mut Frame, area: Rect, p: Palette) {
         let area = Rect::new(area.x, area.y, 26, 14);
@@ -238,8 +273,15 @@ impl App {
         };
         let arg = words.get(1).copied().unwrap_or("");
         let req = match *cmd {
-            "login" => Request::Login,
-            "logout" => Request::Logout,
+            "login" => {
+                self.token_input = Some(TokenInput::default());
+                return Ok(None);
+            }
+            "logout" => {
+                self.auth_job = Some(LocalAuth::Remove);
+                return Ok(None);
+            }
+            "connect-browser" => Request::Login,
             "play" => Request::Play,
             "pause" => Request::Pause,
             "next" => Request::Next,
@@ -292,6 +334,38 @@ impl App {
         if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
             return Ok((true, None));
         }
+        if let Some(input) = self.token_input.as_mut() {
+            match k.code {
+                KeyCode::Esc => {
+                    self.token_input = None;
+                    self.note = "Login cancelled; saved token unchanged.".into();
+                }
+                KeyCode::Enter => {
+                    let input = self.token_input.take().expect("token input exists");
+                    match input.finish() {
+                        Ok(token) => {
+                            self.auth_job = Some(LocalAuth::Save(token));
+                            self.note = "Saving token privately…".into();
+                        }
+                        Err(_) => {
+                            self.token_input = Some(TokenInput::default());
+                            self.note="Invalid token. Paste one token, at most 16 KiB, without internal whitespace.".into();
+                        }
+                    }
+                }
+                KeyCode::Char('u') if k.modifiers.contains(KeyModifiers::CONTROL) => input.clear(),
+                KeyCode::Backspace => input.backspace(),
+                KeyCode::Char(c)
+                    if !k
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    input.append(&c.to_string())
+                }
+                _ => {}
+            }
+            return Ok((false, None));
+        }
         if self.input != Input::None {
             match k.code {
                 KeyCode::Esc => {
@@ -337,8 +411,37 @@ impl App {
             return Ok((false, None));
         }
         let action = keys::action_for(k, &self.config.keybindings);
+        if matches!(action, Some("down" | "up")) && matches!(self.screen, 1 | 8) && !self.sidebar {
+            if let Some(lyrics::LyricsState::Found(lyrics)) =
+                self.lyrics_result.as_ref().map(|r| &r.state)
+            {
+                let area = player::areas(
+                    Rect::new(0, 0, self.viewport.width, self.viewport.height),
+                    self.config.artwork,
+                )
+                .lyrics;
+                let rows = player::lyric_rows(lyrics, area.width);
+                let current = self.lyrics_scroll.unwrap_or_else(|| {
+                    lyrics
+                        .active_line(self.status.as_ref().map_or(0.0, |s| s.playback.position))
+                        .and_then(|index| rows.iter().position(|(line, _)| *line == index))
+                        .unwrap_or(0)
+                });
+                self.lyrics_scroll = Some(if action == Some("down") {
+                    current.saturating_add(1).min(rows.len().saturating_sub(1))
+                } else {
+                    current.saturating_sub(1)
+                });
+            }
+            return Ok((false, None));
+        }
         let mut req = None;
         match action {
+            Some("lyrics_refresh") => {
+                self.lyrics_generation = self.lyrics_generation.wrapping_add(1);
+                self.lyrics_scroll = None;
+            }
+            Some("login") => self.token_input = Some(TokenInput::default()),
             Some("quit") => return Ok((true, None)),
             Some("toggle") => req = Some(Request::Toggle),
             Some("next") => req = Some(Request::Next),
@@ -522,11 +625,33 @@ impl App {
         Ok(())
     }
     pub fn render(&self, f: &mut Frame) {
+        self.render_base(f);
+        if self.token_input.is_some() {
+            let a = f.area();
+            let w = a.width.min(70);
+            let h = a.height.min(11);
+            let modal = Rect::new(a.x + (a.width - w) / 2, a.y + (a.height - h) / 2, w, h);
+            let p = palette(&self.config);
+            f.render_widget(Clear, modal);
+            f.render_widget(Paragraph::new("Paste token (hidden)\n\nMusic User Token\n[ input is never displayed ]\n\nEnter save · Esc cancel · Ctrl-U clear\n\nStorage is local; account acceptance is not verified.")
+                .style(Style::default().fg(p.fg).bg(p.bg)).wrap(Wrap{trim:false})
+                .block(Block::bordered().title(" LOGIN ").border_style(Style::default().fg(p.fg)).padding(Padding::horizontal(1))),modal);
+        }
+    }
+    fn render_base(&self, f: &mut Frame) {
         let area = f.area();
         let p = palette(&self.config);
         f.render_widget(Block::new().style(Style::default().bg(p.bg).fg(p.fg)), area);
         if area.width < 20 || area.height < 4 {
             f.render_widget(Paragraph::new("Rustune • q quit"), area);
+            return;
+        }
+        if matches!(self.screen, 1 | 8) && !self.sidebar && area.height < 8 {
+            f.render_widget(Paragraph::new("RUSTUNE · L login · q quit"), area);
+            return;
+        }
+        if matches!(self.screen, 1 | 8) && !self.sidebar {
+            player::render(self, f, p);
             return;
         }
         let [top, body, player, status] = Layout::vertical([
@@ -641,7 +766,7 @@ impl App {
             };
             let s = self.status.as_ref();
             let info = format!(
-                "SESSION\n\n{}\n\nQueue: {} tracks\nRepeat: {:?}\nShuffle: {}\n\n{}\n\n:login   Sign in\n:profile Change resources\n:sleep   Sleep timer\n\nTab  Switch focus\nj/k  Navigate\n?    Help",
+                "SESSION\n\n{}\n\nQueue: {} tracks\nRepeat: {:?}\nShuffle: {}\n\n{}\n\n:login   Save token\n:profile Change resources\n:sleep   Sleep timer\n\nTab  Switch focus\nj/k  Navigate\n?    Help",
                 if s.is_some_and(|s| s.playback.authorized) {
                     "Apple Music authorized"
                 } else {
@@ -742,6 +867,10 @@ impl App {
         );
     }
     fn content(&self, f: &mut Frame, a: Rect, p: Palette) {
+        if self.screen == 8 {
+            player::render_lyrics(self, f, a, p);
+            return;
+        }
         let a = if self.screen == 1
             && self
                 .artwork_request(Size::new(f.area().width, f.area().height))
@@ -773,7 +902,7 @@ impl App {
                     Paragraph::new(if self.screen == 2 {
                         "Press / to search. F2 changes songs / albums / artists / playlists."
                     } else {
-                        "No items loaded. :login to authorize, then reopen this screen."
+                        "No items loaded. :connect-browser connects the optional legacy backend. L saves a local token."
                     })
                     .style(Style::default().fg(p.muted))
                     .wrap(Wrap { trim: false }),
@@ -819,9 +948,9 @@ impl App {
             return;
         }
         let text=match self.screen {
-            0=>format!("YOUR MUSIC. YOUR TERMINAL.\n\n{}\n\nTab switches navigation focus. 1–9 open screens.\n/ Search · Enter play/open · a Add to queue\n:theme monochrome | tokyo_night changes the palette.\n:profile minimal disables artwork and reduces caches.\n\nEXPERIMENTAL · See Audio Settings for available capabilities.",if self.config.backend==crate::config::BackendKind::Disabled {"Native Apple Music playback is not available in this build.\nA Music User Token alone does not provide a playback engine.\nNo browser backend is started by default."}else{"An optional browser playback backend is configured.\n:login connects it; / searches Apple Music.\nA subscription and compatible protected-content support are required."}),
+            0=>format!("YOUR MUSIC. YOUR TERMINAL.\n\n{}\n\nTab switches navigation focus. 1–9 open screens.\n/ Search · Enter play/open · a Add to queue\n:theme monochrome | tokyo_night changes the palette.\n:profile minimal disables artwork and reduces caches.\n\nEXPERIMENTAL · See Audio Settings for available capabilities.",if self.config.backend==crate::config::BackendKind::Disabled {"Native Apple Music playback is not available in this build.\nA Music User Token alone does not provide a playback engine.\nNo browser backend is started by default."}else{"An optional browser playback backend is configured.\n:connect-browser connects it; / searches Apple Music.\nA subscription and compatible protected-content support are required."}),
             1=>self.status.as_ref().and_then(|s|s.playback.track.as_ref()).map_or("Nothing playing. No audio quality has been reported.".into(),|t|format!("NOW PLAYING\n\n{}\n{}\n{}\n\n{}\n\nSpace  Play/pause\n← / →  Seek 10 seconds\n+ / -  Volume\nn / p  Next / previous\ns      Shuffle\nr      Repeat\nm      Mute\n\n:sleep MINUTES sets a sleep timer (0 cancels).",t.title,t.artist,t.album,self.status.as_ref().map(|s|s.playback.quality_label()).unwrap_or_default())),
-            8=>"LYRICS\n\nUnavailable: this backend has no verified public API for synchronized lyrics.\n\nRustune does not scrape or substitute lyrics from unrelated services.".into(),
+
             9=>"EQUALIZER · UNAVAILABLE\n\n31  62  125  250  500  1k  2k  4k  8k  16k Hz\n\nProtected playback does not expose a verified PCM signal to Rustune.\nEQ, preamp, bass, treble, normalization, crossfade and visualizer are disabled.\n\nUse your existing PipeWire DSP chain (for example EasyEffects) externally.\nNo processing or gapless guarantees are claimed.".into(),
             10=>format!("AUDIO SETTINGS\n\n● Auto               Backend chooses stream quality\n○ Data Saver         Unavailable\n○ Standard           Unavailable\n○ High Quality       Unavailable\n○ Lossless           Unavailable\n○ Hi-Res Lossless    Unavailable\n\nBackend: {}\n{}\n\nSource codec        Unknown\nSource sample rate  Unknown\nSource bit depth    Unknown\nSource channels     Unknown\nBuffer status       Unknown\n\nThe MusicKit target is a requested/adaptive rate, not a measurement.\nPipeWire output format does not establish source quality.",self.status.as_ref().map_or("No playback process",|s|s.backend.as_str()),self.status.as_ref().map_or("Source quality unknown".into(),|s|s.playback.quality_label())),
             11=>format!("SETTINGS\n\nTheme: {}\nResources: {:?}\n\n:theme dark | light | catppuccin_mocha | catppuccin_latte\n:theme gruvbox | nord | monochrome | tokyo_night | custom\n:profile minimal | balanced | enhanced\n\n~/.config/rustune/config.toml\nKeybindings, custom colors, Chromium path, notifications, mouse\nand daemon behavior can be configured there.\n\n:login  :logout  :sleep MINUTES  :clear  :history\nDaemon mode keeps playback running when the TUI closes.",self.config.theme,self.status.as_ref().map_or(self.config.performance,|s|s.profile)),
@@ -849,12 +978,30 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
         "TUI requires a terminal; use rustune --help for CLI commands"
     );
     let mut app = App::new(config.clone());
+    app.token_stored = auth::has_user_token(&paths);
     app.status = Some(serde_json::from_value(
         ipc::request(&paths, &Request::Status).await?,
     )?);
     let (jobs, mut work) = mpsc::channel::<Request>(8);
     let (done, mut responses) = mpsc::channel(8);
     let worker_paths = paths.clone();
+    let auth_paths = paths.clone();
+    let (auth_jobs, mut auth_work) = mpsc::channel::<LocalAuth>(1);
+    let (auth_done, mut auth_results) = mpsc::channel(1);
+    let auth_worker = tokio::spawn(async move {
+        while let Some(job) = auth_work.recv().await {
+            let paths = auth_paths.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                auth::apply(&paths, job)?;
+                Ok::<_, anyhow::Error>(auth::has_user_token(&paths))
+            })
+            .await;
+            let state = result.ok().and_then(Result::ok);
+            if auth_done.send(state).await.is_err() {
+                break;
+            }
+        }
+    });
     let worker = tokio::spawn(async move {
         while let Some(r) = work.recv().await {
             let result = ipc::request(&worker_paths, &r).await;
@@ -886,30 +1033,49 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
     let mut terminal = ratatui::init();
     let (artwork_jobs, mut covers, artwork_worker) = artwork::worker();
     let mut last_artwork = None;
+    let (lyrics_jobs, mut lyric_results, lyrics_worker) = lyrics::worker();
+    let mut last_lyrics = None;
     let result=async {
         if config.mouse { execute!(stdout(), EnableMouseCapture)?; }
-        let mut events=EventStream::new();
+        execute!(stdout(), crossterm::event::EnableBracketedPaste)?;
+        let mut events=Events::new()?;
+        let mut resize=tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())?;
         loop {
+            app.viewport=terminal.size()?;
+            if let Some(job)=app.auth_job.take() && auth_jobs.try_send(job).is_err(){app.note="Token storage is busy; try login again.".into();}
             let request=app.artwork_request(terminal.size()?);
             if request!=last_artwork {
                 last_artwork=request.clone();
                 app.cover=None;
                 let _=artwork_jobs.send(request);
             }
+            let request=app.lyrics_request();if request!=last_lyrics {last_lyrics=request.clone();app.lyrics_result=None;app.lyrics_scroll=None;let _=lyrics_jobs.send(request);}
             terminal.draw(|f|app.render(f))?;
             tokio::select! {
+                _=resize.recv()=>{},
+                Some(result)=lyric_results.recv()=>{if Some(&result.request)==last_lyrics.as_ref(){app.accept_lyrics(result);}},
+                Some(result)=auth_results.recv()=>match result{Some(saved)=>{app.token_stored=saved;app.note=if saved{auth::SAVED_MESSAGE.into()}else{"Local token removed; browser/account authorization unchanged.".into()};},None=>app.note="Could not update the private token file; check config-directory permissions.".into()},
                 Some(cover)=covers.recv()=>{if Some(&cover.request)==last_artwork.as_ref(){app.accept_artwork(cover);}}
                 event=events.next()=>{
                     let Some(event)=event else{break;};let event=event?;let mut request=None;
                     match event {
+                        Event::Paste(text)=>{if let Some(input)=app.token_input.as_mut(){input.append(&text);}else if app.input!=Input::None && app.text.len()+text.len()<=512 {app.text.extend(text.chars().filter(|c|!c.is_control()));}},
+                        Event::Overflow=>{if let Some(input)=app.token_input.as_mut(){input.reject_paste();}app.note="Paste exceeds 16 KiB or is invalid. Ctrl-U clears token input.".into();},
                         Event::Key(k) if k.is_press()=>match app.key(k){Ok((quit,r))=>{if quit{break;}request=r;},Err(e)=>{app.note=e.to_string();app.input=Input::None;}},
-                        Event::Mouse(m)=>match m.kind {
+                        Event::Mouse(m) if app.token_input.is_none()=>match m.kind {
                             MouseEventKind::ScrollDown=>app.selected=(app.selected+1).min(app.items.len().saturating_sub(1)),
                             MouseEventKind::ScrollUp=>app.selected=app.selected.saturating_sub(1),
+                            MouseEventKind::Down(MouseButton::Left) if matches!(app.screen,1|8) && !app.sidebar=>{
+                                let size=terminal.size()?;let a=player::areas(Rect::new(0,0,size.width,size.height),app.config.artwork);
+                                if let Some(i)=player::buttons(a.controls).iter().position(|r|r.contains(ratatui::layout::Position::new(m.column,m.row))){
+                                    let action=player::ACTIONS[i];let key=keys::DEFAULTS.iter().find(|(a,_)|*a==action).map_or("",|(_,k)|*k);let key=app.config.keybindings.get(action).map_or(key,String::as_str);
+                                    if let Some(key)=keys::parse_key(key){let (quit,r)=app.key(key)?;if quit{break;}request=r;}
+                                }
+                            },
                             MouseEventKind::Down(MouseButton::Left) if terminal.size()?.width>=85 && m.column<20 && m.row>=3=>{let i=(m.row-3) as usize;if i<SCREENS.len(){request=app.go(i);}},
                             _=>{}
                         },
-                        Event::Resize(_,_)=>{},_=>{}
+                        _=>{}
                     }
                     if let Some(r)=request{if jobs.try_send(r).is_ok(){app.busy=true;}else{app.note="Command queue is full; wait for the current request.".into();}}
 
@@ -927,7 +1093,120 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
     worker.abort();
     subscription.abort();
     artwork_worker.abort();
+    lyrics_worker.abort();
+    auth_worker.abort();
+    let _ = execute!(stdout(), crossterm::event::DisableBracketedPaste);
     let _ = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
     result
+}
+
+#[cfg(test)]
+mod login_tests {
+    use super::*;
+    #[test]
+    fn long_lyric_lines_can_be_scrolled_to_their_end() {
+        let mut app = App::new(Config::default());
+        app.status=Some(serde_json::from_value(serde_json::json!({"playback":{"track":{"id":"sample","title":"Our song","artist":"Our artist"}},"queue_len":1,"current":0,"repeat":"off","shuffle":false,"profile":"balanced","pid":1,"browser_pid":null,"backend":"test","playback_available":false,"browser_shared":false,"uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null})).unwrap());
+        let text = format!("{} FINALWORDS", "Our long sample line ".repeat(40));
+        let lyrics = lyrics::Lyrics::parse(Some(&text), None, false).unwrap();
+        app.accept_lyrics(LyricsResult {
+            request: app.lyrics_request().unwrap(),
+            state: lyrics::LyricsState::Found(std::sync::Arc::new(lyrics)),
+        });
+        app.viewport = Size::new(40, 24);
+        for _ in 0..100 {
+            app.key(crossterm::event::KeyEvent::new(
+                KeyCode::Char('j'),
+                KeyModifiers::NONE,
+            ))
+            .unwrap();
+        }
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(40, 24)).unwrap();
+        t.draw(|f| app.render(f)).unwrap();
+        let all: String = t
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(all.contains("FINALWORDS"));
+    }
+    #[test]
+    fn token_entry_is_hidden_and_submits_only_to_local_storage() {
+        let mut app = App::new(Config::default());
+        let key = |c| crossterm::event::KeyEvent::new(c, KeyModifiers::NONE);
+        assert!(app.key(key(KeyCode::Char('L'))).unwrap().1.is_none());
+        assert!(app.token_input.is_some());
+        for c in "artificial-secret-test".chars() {
+            assert!(app.key(key(KeyCode::Char(c))).unwrap().1.is_none());
+        }
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        t.draw(|f| app.render(f)).unwrap();
+        let all: String = t
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(!all.contains("artificial-secret-test"));
+        assert!(app.text.is_empty());
+        assert!(app.key(key(KeyCode::Enter)).unwrap().1.is_none());
+        assert!(app.token_input.is_none());
+        assert!(matches!(app.auth_job, Some(LocalAuth::Save(_))));
+    }
+
+    #[tokio::test]
+    #[ignore = "visual QA export with public artwork and explicitly synthetic lyrics; no audio"]
+    async fn export_player_layout_for_visual_review() {
+        let mut app = App::new(Config::default());
+        let track=Track{id:"1445734224".into(),kind:"songs".into(),title:"Simple Man".into(),artist:"Lynyrd Skynyrd".into(),album:"Pronounced Leh-Nerd Skin-Nerd (Bonus Tracks)".into(),duration_ms:357933,artwork:Some("https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/1e/5c/85/1e5c85bb-2b43-3057-da09-39446321a191/06UMGIM14960.rgb.jpg/{w}x{h}bb.jpg".into())};
+        app.status=Some(serde_json::from_value(serde_json::json!({"playback":{"track":track,"position":262.0,"duration":357.933,"volume":0.7},"queue_len":1,"current":0,"repeat":"off","shuffle":false,"profile":"balanced","pid":1,"browser_pid":null,"backend":"layout preview","playback_available":false,"browser_shared":false,"uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null})).unwrap());
+        app.note = "LAYOUT PREVIEW · no audio · synthetic text · real public album artwork".into();
+        let (jobs, mut results, worker) = artwork::worker();
+        jobs.send(app.artwork_request(Size::new(142, 39))).unwrap();
+        let cover = tokio::time::timeout(std::time::Duration::from_secs(10), results.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(cover.image.is_some());
+        app.accept_artwork(cover);
+        worker.abort();
+        let text = (0..28)
+            .map(|i| {
+                format!(
+                    "[{:02}:{:02}.00]{}",
+                    (210 + i * 3) / 60,
+                    (210 + i * 3) % 60,
+                    [
+                        "A line of sample text for this layout",
+                        "Centered words beside the album cover",
+                        "The current verse follows the song clock",
+                        "Use j and k to read at your own pace"
+                    ][i % 4]
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let lyrics = lyrics::Lyrics::parse(None, Some(&text), false).unwrap();
+        app.accept_lyrics(LyricsResult {
+            request: app.lyrics_request().unwrap(),
+            state: lyrics::LyricsState::Found(std::sync::Arc::new(lyrics)),
+        });
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(142, 39)).unwrap();
+        t.draw(|f| app.render(f)).unwrap();
+        let color = |c: Color, default| match c {
+            Color::Rgb(r, g, b) => [r, g, b],
+            _ => default,
+        };
+        let cells:Vec<_>=t.backend().buffer().content.iter().map(|c|serde_json::json!({"text":c.symbol(),"fg":color(c.fg,[255,255,255]),"bg":color(c.bg,[0,0,0]),"bold":c.modifier.contains(ratatui::style::Modifier::BOLD)})).collect();
+        std::fs::write(
+            "/tmp/rustune-player-preview.json",
+            serde_json::to_vec(&serde_json::json!({"width":142,"height":39,"cells":cells}))
+                .unwrap(),
+        )
+        .unwrap();
+    }
 }

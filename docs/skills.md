@@ -34,3 +34,14 @@ application code and runtime are not incorporated. Cargo metadata lists dual or
 permissive dependency license choices compatible with MIT application source;
 third-party dependencies retain their own license obligations. MusicKit,
 browsers and CDM components are not redistributed here.
+
+
+The token/lyrics update used the same Rust/Ratatui/TDD/debugging/review workflow.
+amcli and the user's screenshot supplied visual composition; its code was not
+copied. LRCLIB's primary API documentation supplied request identification,
+matching and throttling requirements. Product Design web-prototype guidance was
+inspected for scope and not applied to replatform this native terminal application.
+The review's echo/paste/login-help findings and long-line accessibility issue
+were fixed with terminal/input/render regressions; visual inspection found and
+fixed a source-image upscaling issue. No optional feature is counted as native
+full-song playback verification.
