@@ -6,11 +6,13 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("next", "n"),
     ("previous", "p"),
     ("search", "/"),
-    ("down", "j"),
-    ("up", "k"),
+    ("down", "Down"),
+    ("up", "Up"),
     ("select", "Enter"),
     ("back", "Esc"),
     ("focus", "Tab"),
+    ("menu_left", "Left"),
+    ("menu_right", "Right"),
     ("volume_up", "+"),
     ("volume_down", "-"),
     ("shuffle", "s"),
@@ -29,9 +31,10 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("move_up", "K"),
     ("move_down", "J"),
     ("page", "PageDown"),
+    ("page_back", "PageUp"),
     ("mute", "m"),
-    ("seek_back", "Left"),
-    ("seek_forward", "Right"),
+    ("seek_back", "alt-Left"),
+    ("seek_forward", "alt-Right"),
 ];
 pub fn parse_key(s: &str) -> Option<KeyEvent> {
     let (mods, name) = if let Some(k) = s.strip_prefix("ctrl-") {
@@ -86,8 +89,15 @@ pub fn action_for(mut event: KeyEvent, b: &BTreeMap<String, String>) -> Option<&
     if matches!(event.code, KeyCode::Char(_)) {
         event.modifiers.remove(KeyModifiers::SHIFT);
     }
-    DEFAULTS.iter().find_map(|(a, k)| {
-        let key = parse_key(b.get(*a).map_or(*k, String::as_str))?;
-        (event.code == key.code && event.modifiers == key.modifiers).then_some(*a)
-    })
+    DEFAULTS
+        .iter()
+        .find_map(|(a, k)| {
+            let key = parse_key(b.get(*a).map_or(*k, String::as_str))?;
+            (event.code == key.code && event.modifiers == key.modifiers).then_some(*a)
+        })
+        .or_else(|| match event.code {
+            KeyCode::Char('j') if event.modifiers.is_empty() => Some("down"),
+            KeyCode::Char('k') if event.modifiers.is_empty() => Some("up"),
+            _ => None,
+        })
 }

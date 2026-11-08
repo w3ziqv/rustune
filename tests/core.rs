@@ -108,3 +108,20 @@ fn monochrome_is_default_and_tokyo_night_is_selectable() {
 fn sixel_is_rejected_without_verified_terminal_pixel_geometry() {
     assert!(Config::parse("artwork_protocol = 'sixel'").is_err());
 }
+
+#[test]
+fn public_catalog_country_is_validated_independently_of_credentials() {
+    assert!(Config::parse("catalog_country = 'PL'").is_ok());
+    for invalid in ["P", "POL", "../US", "12"] {
+        assert!(Config::parse(&format!("catalog_country = '{invalid}'")).is_err());
+    }
+}
+
+#[test]
+fn queued_catalog_links_are_bounded_and_cannot_inject_terminal_controls() {
+    let mut t = track("1");
+    t.url = Some("x".repeat(2049));
+    assert!(rustune::service::validate_track(&t).is_err());
+    t.url = Some("https://music.apple.com/\u{1b}[31m".into());
+    assert!(rustune::service::validate_track(&t).is_err());
+}

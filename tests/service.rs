@@ -88,6 +88,27 @@ async fn real_service_persists_queue_pushes_updates_and_obeys_mpris() {
         .unwrap();
     assert!(String::from_utf8(update).unwrap().contains("minimal"));
     drop(stream);
+    for request in [
+        Request::Artwork(false),
+        Request::Lyrics(false),
+        Request::CatalogCountry("US".into()),
+    ] {
+        ipc::request(&paths, &request).await.unwrap();
+    }
+    let updated = Config::load(&paths).unwrap();
+    assert!(!updated.artwork && !updated.lyrics);
+    assert_eq!(updated.catalog_country, "US");
+    assert_eq!(
+        ipc::request(&paths, &Request::Status).await.unwrap()["catalog_country"],
+        "US"
+    );
+    for request in [
+        Request::Artwork(true),
+        Request::Lyrics(true),
+        Request::CatalogCountry("PL".into()),
+    ] {
+        ipc::request(&paths, &request).await.unwrap();
+    }
     for id in ["a", "b", "c"] {
         let track = Track {
             id: id.into(),

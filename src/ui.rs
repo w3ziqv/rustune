@@ -1,4 +1,7 @@
 //! Event-driven terminal client. Only visible rows are constructed.
+mod interaction;
+#[cfg(test)]
+mod keyboard_tests;
 mod player;
 use crate::{
     artwork::{self, CoverRequest, CoverResult},
@@ -103,10 +106,15 @@ pub struct App {
     pub screen: usize,
     pub selected: usize,
     sidebar: bool,
+    control_focus: Option<usize>,
+    song_actions: Option<interaction::SongActions>,
     nav: usize,
     items: Vec<Track>,
     next: Option<String>,
     queue_offset: usize,
+    queue_view_revision: Option<u64>,
+    catalog_offset: usize,
+    back_stack: Vec<interaction::BrowseView>,
     input: Input,
     text: String,
     query: String,
@@ -132,10 +140,15 @@ impl App {
             screen: 1,
             selected: 0,
             sidebar: false,
+            control_focus: None,
+            song_actions: None,
             nav: 1,
             items: Vec::new(),
             next: None,
             queue_offset: 0,
+            queue_view_revision: None,
+            catalog_offset: 0,
+            back_stack: Vec::new(),
             input: Input::None,
             text: String::new(),
             query: String::new(),
@@ -209,6 +222,13 @@ impl App {
                 || old.current != status.current
                 || old.pid != status.pid
         });
+        if changed {
+            self.close_queue_actions();
+            if self.screen == 7 && self.queue_view_revision != Some(status.queue_revision) {
+                self.items.clear();
+                self.queue_view_revision = None;
+            }
+        }
         self.status = Some(status);
         (self.screen == 7 && changed).then(|| self.page_request())
     }
@@ -217,6 +237,8 @@ impl App {
             self.inspected_track
                 .as_ref()
                 .or_else(|| self.status.as_ref()?.playback.track.as_ref())
+        } else if matches!(self.screen, 2 | 4 | 5 | 7) {
+            self.items.get(self.selected)
         } else {
             self.status.as_ref()?.playback.track.as_ref()
         }
@@ -290,24 +312,45 @@ impl App {
         if screen != 8 {
             self.inspected_track = None;
         }
+        if screen != 8 {
+            self.back_stack.clear();
+        }
         self.screen = screen;
         self.nav = screen;
+        self.control_focus = None;
+        self.song_actions = None;
         self.selected = 0;
         self.items.clear();
         self.next = None;
         self.sidebar = false;
         self.query.clear();
         self.queue_offset = 0;
+        self.catalog_offset = 0;
         self.kind = match screen {
+            4 => "search:albums",
+            5 => "search:artists",
             3 => "library",
-            4 => "albums",
-            5 => "artists",
             6 => "playlists",
             _ => "search:songs",
         }
         .into();
-        matches!(screen, 3..=7).then(|| self.page_request())
+        self.input = Input::None;
+        if matches!(screen, 2 | 4 | 5) {
+            self.search_type = if screen == 4 {
+                1
+            } else if screen == 5 {
+                2
+            } else {
+                0
+            };
+            self.input = Input::Search;
+            self.text.clear();
+            self.note =
+                "Public Apple catalog · type a query, Tab changes type, Enter searches".into();
+        }
+        (screen == 7).then(|| self.page_request())
     }
+
     fn command(&mut self) -> Result<Option<Request>> {
         let words: Vec<_> = self.text.split_whitespace().collect();
         let Some(cmd) = words.first() else {
@@ -407,6 +450,9 @@ impl App {
             }
             return Ok((false, None));
         }
+        if self.song_actions.is_some() {
+            return Ok(self.song_menu_key(k.code));
+        }
         if self.input != Input::None {
             match k.code {
                 KeyCode::Esc => {
@@ -418,14 +464,26 @@ impl App {
                 }
                 KeyCode::Enter => {
                     let r = if self.input == Input::Search {
-                        self.screen = 2;
-                        self.nav = 2;
+                        if self.text.trim().is_empty() {
+                            self.note = "Enter a song, album or artist to search".into();
+                            return Ok((false, None));
+                        }
+                        if !matches!(self.screen, 2 | 4 | 5) {
+                            self.screen = 2;
+                        }
+                        self.nav = self.screen;
                         self.sidebar = false;
+                        self.control_focus = None;
+                        self.items.clear();
+                        self.next = None;
+                        self.catalog_offset = 0;
+                        self.back_stack.clear();
+                        self.note = "Searching the public Apple catalog…".into();
                         self.selected = 0;
                         self.query = self.text.trim().into();
                         self.kind = format!(
                             "search:{}",
-                            ["songs", "albums", "artists", "playlists"][self.search_type]
+                            ["songs", "albums", "artists"][self.search_type]
                         );
                         Some(self.page_request())
                     } else {
@@ -444,14 +502,53 @@ impl App {
                         self.text.push(c);
                     }
                 }
-                KeyCode::F(2) if self.input == Input::Search => {
-                    self.search_type = (self.search_type + 1) % 4
+                KeyCode::F(2) | KeyCode::Tab | KeyCode::Up | KeyCode::Down
+                    if self.input == Input::Search =>
+                {
+                    self.search_type = (self.search_type + 1) % 3
                 }
                 _ => {}
             }
             return Ok((false, None));
         }
         let action = keys::action_for(k, &self.config.keybindings);
+        if let Some(index) = self.control_focus {
+            match action {
+                Some("menu_left") => {
+                    if index > 0 {
+                        self.control_focus = Some(index - 1);
+                    } else {
+                        self.control_focus = None;
+                        self.sidebar = true;
+                        self.nav = self.screen;
+                    }
+                    return Ok((false, None));
+                }
+                Some("menu_right") => {
+                    self.control_focus = Some((index + 1).min(6));
+                    return Ok((false, None));
+                }
+                Some("select") => return Ok(self.player_action(index)),
+                Some("up" | "down") => {
+                    self.control_focus = None;
+                    return Ok((false, None));
+                }
+                _ => {}
+            }
+        }
+        if action == Some("down")
+            && k.code == KeyCode::Down
+            && matches!(self.screen, 1 | 8)
+            && !self.sidebar
+            && !matches!(
+                self.lyrics_result.as_ref().map(|r| &r.state),
+                Some(lyrics::LyricsState::Found(_))
+            )
+        {
+            self.control_focus = Some(0);
+            return Ok((false, None));
+        }
+
         if matches!(action, Some("down" | "up")) && matches!(self.screen, 1 | 8) && !self.sidebar {
             if let Some(lyrics::LyricsState::Found(lyrics)) =
                 self.lyrics_result.as_ref().map(|r| &r.state)
@@ -491,6 +588,8 @@ impl App {
             Some("next") => req = Some(Request::Next),
             Some("previous") => req = Some(Request::Previous),
             Some("search") => {
+                self.control_focus = None;
+                self.sidebar = false;
                 self.input = Input::Search;
                 self.text = self.query.clone();
             }
@@ -502,7 +601,11 @@ impl App {
                 if self.sidebar {
                     self.nav = (self.nav + 1) % SCREENS.len();
                 } else {
-                    self.selected = (self.selected + 1).min(self.items.len().saturating_sub(1));
+                    self.selected = (self.selected + 1).min(if self.screen == 11 {
+                        self.settings_rows().len() - 1
+                    } else {
+                        self.items.len().saturating_sub(1)
+                    });
                 }
             }
             Some("up") => {
@@ -513,28 +616,49 @@ impl App {
                 }
             }
             Some("focus") => {
-                self.sidebar = !self.sidebar;
+                if self.sidebar {
+                    self.sidebar = false;
+                    if matches!(self.screen, 1 | 8) {
+                        self.control_focus = Some(0);
+                    }
+                } else if self.control_focus.is_some() {
+                    self.control_focus = None;
+                } else {
+                    self.sidebar = true;
+                    self.nav = self.screen;
+                }
+            }
+            Some("menu_left") if !self.sidebar && self.restore_view() => {
+                if self.screen == 7 {
+                    req = Some(self.page_request());
+                }
+            }
+            Some("back" | "menu_left") => {
+                self.control_focus = None;
+                self.sidebar = true;
                 self.nav = self.screen;
             }
-            Some("back") => {
-                self.sidebar = true;
+            Some("menu_right") if !self.sidebar && matches!(self.screen, 1 | 8) => {
+                self.control_focus = Some(0);
             }
-            Some("select") => {
+
+            Some("select" | "menu_right") => {
                 if self.sidebar {
                     req = self.go(self.nav);
+                } else if self.screen == 11 {
+                    return Ok(self.settings_action());
                 } else if let Some(track) = self.items.get(self.selected).cloned() {
-                    if self.screen == 7 {
-                        req = Some(Request::PlayIndex(self.queue_offset + self.selected));
-                    } else if track.kind == "songs" || track.kind == "library-songs" {
-                        req = Some(Request::Enqueue {
-                            track,
-                            next: false,
-                            play: true,
-                        });
+                    if track.kind == "songs" || track.kind == "library-songs" {
+                        self.open_song_actions(track);
                     } else {
+                        self.remember_view();
+                        self.catalog_offset = 0;
                         self.kind = format!("open:{}:{}", track.kind, track.id);
                         self.query.clear();
                         self.selected = 0;
+                        self.items.clear();
+                        self.next = None;
+                        self.note = "Loading public catalog items…".into();
                         req = Some(self.page_request());
                     }
                 }
@@ -549,18 +673,39 @@ impl App {
                 }
             }
             Some("remove") if self.screen == 7 => {
-                req = Some(Request::Remove(self.queue_offset + self.selected))
+                req = self.checked_queue_edit(self.queue_offset + self.selected, None)
             }
             Some("move_up") if self.screen == 7 && self.queue_offset + self.selected > 0 => {
                 let from = self.queue_offset + self.selected;
-                req = Some(Request::Move { from, to: from - 1 });
+                req = self.checked_queue_edit(from, Some(from - 1));
                 self.selected = self.selected.saturating_sub(1);
             }
             Some("move_down") if self.screen == 7 => {
                 let from = self.queue_offset + self.selected;
                 if self.status.as_ref().is_some_and(|s| from + 1 < s.queue_len) {
-                    req = Some(Request::Move { from, to: from + 1 });
+                    req = self.checked_queue_edit(from, Some(from + 1));
                     self.selected = (self.selected + 1).min(self.items.len().saturating_sub(1));
+                }
+            }
+            Some("page_back") => {
+                if self.screen == 7 && self.queue_offset > 0 {
+                    self.queue_offset = self
+                        .queue_offset
+                        .saturating_sub(self.config.performance.limits().page_size);
+                    self.selected = 0;
+                    self.items.clear();
+                    self.queue_view_revision = None;
+                    req = Some(self.page_request());
+                } else if matches!(self.screen, 2 | 4 | 5) && self.catalog_offset > 0 {
+                    let offset = self
+                        .catalog_offset
+                        .saturating_sub(self.config.performance.limits().page_size);
+                    req = Some(Request::Browse {
+                        kind: self.kind.clone(),
+                        term: self.query.clone(),
+                        next: Some(offset.to_string()),
+                    });
+                    self.selected = 0;
                 }
             }
             Some("page") => {
@@ -572,6 +717,8 @@ impl App {
                     {
                         self.queue_offset += self.items.len();
                         self.selected = 0;
+                        self.items.clear();
+                        self.queue_view_revision = None;
                         req = Some(self.page_request());
                     }
                 } else if let Some(next) = self.next.take() {
@@ -623,6 +770,9 @@ impl App {
                 self.go(9);
             }
             Some("lyrics") => {
+                if matches!(self.screen, 2..=7) {
+                    self.remember_view();
+                }
                 self.inspected_track = if matches!(self.screen, 2..=7) {
                     self.items.get(self.selected).cloned()
                 } else {
@@ -651,16 +801,34 @@ impl App {
     }
     fn accept(&mut self, r: &Request, value: serde_json::Value) -> Result<()> {
         match r {
-            Request::Browse { .. } => {
+            Request::Browse { kind, term, next } => {
+                if kind != &self.kind || term != &self.query {
+                    return Ok(());
+                }
+                self.catalog_offset = next.as_deref().and_then(|n| n.parse().ok()).unwrap_or(0);
                 let p: Page = serde_json::from_value(value)?;
                 self.items = p.items;
                 self.next = p.next;
                 self.note = format!(
-                    "{} results • Enter play/open • a queue • A play next • PgDn more",
+                    "{} results · Apple/iTunes public catalog · Enter actions/open · PgDn more",
                     self.items.len()
                 );
             }
-            Request::QueuePage { .. } => {
+            Request::QueuePage { offset } => {
+                if self.screen != 7 || *offset != self.queue_offset {
+                    return Ok(());
+                }
+                self.close_queue_actions();
+                let revision = value["revision"].as_u64();
+                if revision.is_some()
+                    && self
+                        .status
+                        .as_ref()
+                        .is_some_and(|status| Some(status.queue_revision) != revision)
+                {
+                    return Ok(());
+                }
+                self.queue_view_revision = revision;
                 self.items = serde_json::from_value(value["items"].clone())?;
                 self.selected = self.selected.min(self.items.len().saturating_sub(1));
             }
@@ -668,6 +836,16 @@ impl App {
                 self.note = serde_json::from_value::<Vec<String>>(value)?.join("  ·  ")
             }
             _ => {
+                match r {
+                    Request::Theme(theme) => self.config.theme = theme.clone(),
+                    Request::Profile(mode) => self.config.performance = *mode,
+                    Request::Artwork(enabled) => self.config.artwork = *enabled,
+                    Request::Lyrics(enabled) => self.config.lyrics = *enabled,
+                    Request::CatalogCountry(country) => {
+                        self.config.catalog_country = country.clone()
+                    }
+                    _ => {}
+                }
                 if let Ok(s) = serde_json::from_value::<Status>(value) {
                     self.note = s.message.clone();
                     self.status = Some(s);
@@ -678,6 +856,7 @@ impl App {
     }
     pub fn render(&self, f: &mut Frame) {
         self.render_base(f);
+        self.render_song_menu(f, palette(&self.config));
         if self.token_input.is_some() {
             let a = f.area();
             let w = a.width.min(70);
@@ -795,7 +974,7 @@ impl App {
         if self.sidebar && nav.is_none() {
             f.render_widget(
                 Paragraph::new(format!(
-                    "Navigation: {}\n j/k choose · Enter open · Tab return",
+                    "Navigation: {}\n ↑/↓ choose · Enter/→ open · ←/Esc menu",
                     SCREENS[self.nav]
                 ))
                 .style(Style::default().fg(p.accent))
@@ -822,12 +1001,12 @@ impl App {
                 detail
             };
             let s = self.status.as_ref();
-            let info = format!(
+            let mut info = format!(
                 "SESSION\n\n{}\n\nQueue: {} tracks\nRepeat: {:?}\nShuffle: {}\n\n{}\n\n:login   Save token\n:profile Change resources\n:sleep   Sleep timer\n\nTab  Switch focus\nj/k  Navigate\n?    Help",
                 if s.is_some_and(|s| s.playback.authorized) {
                     "Apple Music authorized"
                 } else {
-                    "Apple Music not authorized"
+                    "Account acceptance unverified"
                 },
                 s.map_or(0, |s| s.queue_len),
                 s.map_or(crate::model::Repeat::Off, |s| s.repeat),
@@ -838,6 +1017,19 @@ impl App {
                     "L  Enter Music User Token"
                 }
             );
+            if matches!(self.screen, 2 | 4 | 5) {
+                let item = self.items.get(self.selected);
+                info = format!(
+                    "APPLE / ITUNES CATALOG\n\nNo token required\nCountry: {}\n\nEnter / →: actions or open\n←: previous results / menu\nPgUp / PgDn: pages\n\nStore link:\n{}\n\nNative audio unavailable",
+                    self.status
+                        .as_ref()
+                        .map_or(self.config.catalog_country.as_str(), |s| s
+                            .catalog_country
+                            .as_str()),
+                    item.and_then(|t| t.url.as_deref())
+                        .unwrap_or("Select a result")
+                );
+            }
             f.render_widget(
                 Paragraph::new(info)
                     .style(Style::default().fg(p.muted))
@@ -857,7 +1049,7 @@ impl App {
         let play = s.map(|s| &s.playback);
         let track = play.and_then(|s| s.track.as_ref());
         let label = track.map_or_else(
-            || "No track playing  ·  / search to begin".into(),
+            || "No audio engine  ·  ← menu  ·  / public search".into(),
             |t| {
                 format!(
                     "{}  {} — {}",
@@ -910,7 +1102,7 @@ impl App {
                 },
                 self.text,
                 if self.input == Input::Search {
-                    "  [F2 type · Enter search]"
+                    "  [Tab type · Enter search · Esc cancel]"
                 } else {
                     "  [Enter run · Esc cancel]"
                 }
@@ -924,6 +1116,15 @@ impl App {
         );
     }
     fn content(&self, f: &mut Frame, a: Rect, p: Palette) {
+        if self.screen == 11 {
+            self.render_settings(f, a, p);
+            return;
+        }
+        if matches!(self.screen, 3 | 6) {
+            f.render_widget(Paragraph::new("PERSONAL ACCOUNT · UNAVAILABLE\n\nPersonal library and playlist authorization is not implemented. Saving a Music User Token only stores it locally.\n\nUse Search for the public Apple catalog. ←/Esc returns to the menu.").wrap(Wrap{trim:false}),a);
+            return;
+        }
+
         if self.screen == 8 {
             player::render_lyrics(self, f, a, p);
             return;
@@ -939,10 +1140,16 @@ impl App {
             a
         };
         if matches!(self.screen, 2..=7) {
-            let title = if self.screen == 2 {
+            let title = if self.screen == 7 {
+                "QUEUE · Enter actions · PgUp/PgDn pages".into()
+            } else if self.kind.starts_with("open:albums:") {
+                "ALBUM TRACKS".into()
+            } else if self.kind.starts_with("open:artists:") {
+                "ARTIST ALBUMS".into()
+            } else if matches!(self.screen, 2 | 4 | 5) {
                 format!(
                     "SEARCH  {}  ·  {}",
-                    ["songs", "albums", "artists", "playlists"][self.search_type],
+                    ["songs", "albums", "artists"][self.search_type],
                     self.query
                 )
             } else {
@@ -957,9 +1164,9 @@ impl App {
             if self.items.is_empty() {
                 f.render_widget(
                     Paragraph::new(if self.screen == 2 {
-                        "Press / to search. F2 changes songs / albums / artists / playlists."
+                        "Type a query and press Enter. Tab/F2 changes songs, albums or artists."
                     } else {
-                        "No items loaded. L enters a token. Native catalog access is not implemented."
+                        "No results loaded. Choose Search and type a query. Public search does not require a token."
                     })
                     .style(Style::default().fg(p.muted))
                     .wrap(Wrap { trim: false }),
@@ -1005,14 +1212,14 @@ impl App {
             return;
         }
         let text=match self.screen {
-            0=>"YOUR MUSIC. YOUR TERMINAL.\n\nNative Apple Music playback is not implemented in this build.\nL enters a Music User Token; saving it does not verify account acceptance.\n\nTab switches navigation focus. 1–9 open screens.\n:theme monochrome | tokyo_night changes the palette.\n:profile minimal disables artwork and reduces caches.\n\nEXPERIMENTAL · See Audio Settings for available capabilities.".into(),
+            0=>"YOUR MUSIC. YOUR TERMINAL.\n\nPublic Apple/iTunes catalog: search songs, albums and artists without a token.\n↑/↓ and Enter navigate; ← opens the menu; Settings is keyboard actionable.\n\nNative Apple Music playback is not implemented in this build.\nL enters a Music User Token; saving it does not verify account acceptance.\n\nTab switches navigation focus. 1–9 open screens.\n:theme monochrome | tokyo_night changes the palette.\n:profile minimal disables artwork and reduces caches.\n\nEXPERIMENTAL · See Audio Settings for available capabilities.".into(),
 
             1=>self.status.as_ref().and_then(|s|s.playback.track.as_ref()).map_or("Nothing playing. No audio quality has been reported.".into(),|t|format!("NOW PLAYING\n\n{}\n{}\n{}\n\n{}\n\nSpace  Play/pause\n← / →  Seek 10 seconds\n+ / -  Volume\nn / p  Next / previous\ns      Shuffle\nr      Repeat\nm      Mute\n\n:sleep MINUTES sets a sleep timer (0 cancels).",t.title,t.artist,t.album,self.status.as_ref().map(|s|s.playback.quality_label()).unwrap_or_default())),
 
             9=>"EQUALIZER · UNAVAILABLE\n\n31  62  125  250  500  1k  2k  4k  8k  16k Hz\n\nProtected playback does not expose a verified PCM signal to Rustune.\nEQ, preamp, bass, treble, normalization, crossfade and visualizer are disabled.\n\nUse your existing PipeWire DSP chain (for example EasyEffects) externally.\nNo processing or gapless guarantees are claimed.".into(),
             10=>format!("AUDIO SETTINGS\n\n● Auto               Backend chooses stream quality\n○ Data Saver         Unavailable\n○ Standard           Unavailable\n○ High Quality       Unavailable\n○ Lossless           Unavailable\n○ Hi-Res Lossless    Unavailable\n\nBackend: {}\n{}\n\nSource codec        Unknown\nSource sample rate  Unknown\nSource bit depth    Unknown\nSource channels     Unknown\nBuffer status       Unknown\n\nQuality is shown only when a native backend reports reliable source fields.\nPipeWire output format does not establish source quality.",self.status.as_ref().map_or("No playback process",|s|s.backend.as_str()),self.status.as_ref().map_or("Source quality unknown".into(),|s|s.playback.quality_label())),
             11=>format!("SETTINGS\n\nTheme: {}\nResources: {:?}\n\n:theme dark | light | catppuccin_mocha | catppuccin_latte\n:theme gruvbox | nord | monochrome | tokyo_night | custom\n:profile minimal | balanced | enhanced\n\n~/.config/rustune/config.toml\nKeybindings, custom colors, notifications, mouse\nand daemon behavior can be configured there.\n\n:login  :logout  :sleep MINUTES  :clear  :history\nDaemon mode keeps playback running when the TUI closes.",self.config.theme,self.status.as_ref().map_or(self.config.performance,|s|s.profile)),
-            _=>{let mut s="HELP · DEFAULT BINDINGS\n\n".to_owned();for (action,key) in keys::DEFAULTS {s.push_str(&format!("{key:<12}{action}   "));if s.lines().last().is_some_and(|l|l.len()>65){s.push('\n');}}s.push_str("\n\nTab → j/k → Enter: choose a screen. 1–9 direct navigation.\nSearch: F2 changes resource type. PgDn loads the next page.\nQueue: Delete removes; J/K reorder; :clear clears.\nCommands: :login :logout :profile MODE :theme NAME\n:sleep MINUTES :recent :history :queue :audio :help\nCtrl-C always exits. ~/.config/rustune/config.toml customizes bindings.");s}
+            _=>{let mut s="HELP · DEFAULT BINDINGS\n\n".to_owned();for (action,key) in keys::DEFAULTS {s.push_str(&format!("{key:<12}{action}   "));if s.lines().last().is_some_and(|l|l.len()>65){s.push('\n');}}s.push_str("\n\n←/Esc menu · ↑/↓ choose · Enter/→ open. Tab cycles focus.\nSongs: Enter opens actions. Settings: ↑/↓ then Enter changes a value.\nSearch: Tab/F2 changes songs/albums/artists. PgUp/PgDn changes pages.\n← returns from an album or lyrics to previous results. Alt-←/→ seeks.\nQueue: Delete removes; J/K reorder; :clear clears.\nCommands: :login :logout :profile MODE :theme NAME\n:sleep MINUTES :recent :history :queue :audio :help\nCtrl-C always exits. ~/.config/rustune/config.toml customizes bindings.");s}
         };
         f.render_widget(
             Paragraph::new(text)
@@ -1120,14 +1327,13 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                         Event::Paste(text)=>{if let Some(input)=app.token_input.as_mut(){input.append(&text);}else if app.input!=Input::None && app.text.len()+text.len()<=512 {app.text.extend(text.chars().filter(|c|!c.is_control()));}},
                         Event::Overflow=>{if let Some(input)=app.token_input.as_mut(){input.reject_paste();}app.note="Paste exceeds 16 KiB or is invalid. Ctrl-U clears token input.".into();},
                         Event::Key(k) if k.is_press()=>match app.key(k){Ok((quit,r))=>{if quit{break;}request=r;},Err(e)=>{app.note=e.to_string();app.input=Input::None;}},
-                        Event::Mouse(m) if app.token_input.is_none()=>match m.kind {
+                        Event::Mouse(m) if app.token_input.is_none() && app.song_actions.is_none()=>match m.kind {
                             MouseEventKind::ScrollDown=>app.selected=(app.selected+1).min(app.items.len().saturating_sub(1)),
                             MouseEventKind::ScrollUp=>app.selected=app.selected.saturating_sub(1),
                             MouseEventKind::Down(MouseButton::Left) if matches!(app.screen,1|8) && !app.sidebar=>{
                                 let size=terminal.size()?;let a=player::areas(Rect::new(0,0,size.width,size.height),app.config.artwork);
                                 if let Some(i)=player::buttons(a.controls).iter().position(|r|r.contains(ratatui::layout::Position::new(m.column,m.row))){
-                                    let action=player::ACTIONS[i];let key=keys::DEFAULTS.iter().find(|(a,_)|*a==action).map_or("",|(_,k)|*k);let key=app.config.keybindings.get(action).map_or(key,String::as_str);
-                                    if let Some(key)=keys::parse_key(key){let (quit,r)=app.key(key)?;if quit{break;}request=r;}
+                                    app.control_focus=Some(i);let (quit,r)=app.player_action(i);if quit{break;}request=r;
                                 }
                             },
                             MouseEventKind::Down(MouseButton::Left) if terminal.size()?.width>=85 && m.column<20 && m.row>=3=>{let i=(m.row-3) as usize;if i<SCREENS.len(){request=app.go(i);}},
@@ -1140,6 +1346,8 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                 }
                 Some((r,result))=responses.recv()=>{
                     app.busy=false;
+                    if let Request::Browse {kind,term,..}=&r && (kind!=&app.kind || term!=&app.query || !matches!(app.screen,2|4|5)) {continue;}
+                    if let Request::QueuePage {offset}=&r && (app.screen!=7 || *offset!=app.queue_offset) {continue;}
                     match result {Ok(v)=>{if let Err(e)=app.accept(&r,v){app.note=e.to_string();}
                     if app.screen==7 && !matches!(r,Request::QueuePage{..}){let _=jobs.try_send(app.page_request());}},Err(e)=>app.note=e.to_string()}
 
@@ -1412,7 +1620,7 @@ mod login_tests {
     #[ignore = "visual QA export with public artwork and explicitly synthetic lyrics; no audio"]
     async fn export_player_layout_for_visual_review() {
         let mut app = App::new(Config::default());
-        let track=Track{id:"1445734224".into(),kind:"songs".into(),title:"Simple Man".into(),artist:"Lynyrd Skynyrd".into(),album:"Pronounced Leh-Nerd Skin-Nerd (Bonus Tracks)".into(),duration_ms:357933,artwork:Some("https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/1e/5c/85/1e5c85bb-2b43-3057-da09-39446321a191/06UMGIM14960.rgb.jpg/{w}x{h}bb.jpg".into())};
+        let track=Track{id:"1445734224".into(),kind:"songs".into(),title:"Simple Man".into(),artist:"Lynyrd Skynyrd".into(),album:"Pronounced Leh-Nerd Skin-Nerd (Bonus Tracks)".into(),duration_ms:357933,url:None,artwork:Some("https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/1e/5c/85/1e5c85bb-2b43-3057-da09-39446321a191/06UMGIM14960.rgb.jpg/{w}x{h}bb.jpg".into())};
         app.status=Some(serde_json::from_value(serde_json::json!({"playback":{"track":track,"position":262.0,"duration":357.933,"volume":0.7},"queue_len":1,"current":0,"repeat":"off","shuffle":false,"profile":"balanced","pid":1,"browser_pid":null,"backend":"layout preview","playback_available":false,"browser_shared":false,"uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null})).unwrap());
         app.note = "LAYOUT PREVIEW · no audio · synthetic text · real public album artwork".into();
         let (jobs, mut results, worker) = artwork::worker();

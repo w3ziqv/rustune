@@ -7,6 +7,7 @@ under XDG runtime, with a private data-directory fallback.
 
 ```toml
 performance = "balanced"
+catalog_country = "PL"
 theme = "monochrome"
 artwork = true
 lyrics = true
@@ -49,9 +50,24 @@ Token privately. Backspace edits, Ctrl-U clears, Esc cancels, Enter saves.
 verify Apple account acceptance. No browser login or native messaging remains.
 
 The native playback engine is not implemented. Source quality remains unknown;
-transport, catalog, DSP and nonzero sleep timer requests report unavailability.
+transport, DSP and nonzero sleep timer requests report unavailability. Public
+catalog metadata works independently of token storage; personal-library and
+playlist authorization remain unavailable.
 Queue edits do not auto-play music. The service publishes changes through private
 IPC; it does not poll a browser or keep an idle playback refresh timer.
 
 `lyrics = false` disables anonymous LRCLIB lookup; `artwork = false` disables
 cover fetching. Both use song metadata rather than credentials.
+
+Keyboard navigation: ↑/↓ selects, Enter/→ opens/confirms, ← returns from album
+tracks or a lyrics preview to previous results, Esc opens navigation. Tab cycles
+focus; player buttons use ←/→ and Enter. Search opens a typing field; Tab/F2
+changes songs/albums/artists. PgUp/PgDn changes pages (public queries cap at 200
+results). Settings exposes token entry/removal, themes, resource profiles,
+artwork, lyrics, public catalog country, queue shuffle/repeat, Help and Quit.
+
+`catalog_country` is a two-letter storefront code, normalized to uppercase.
+Public requests use fixed HTTPS Apple Search/Lookup endpoints, no redirects or
+credentials, bounded 512 KiB responses, at most 200 records, eight-second request
+timeouts and a 20-per-minute request budget. Cached requests avoid network calls;
+HTTP Retry-After is honored. A store link accompanies public result metadata.

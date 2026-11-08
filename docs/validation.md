@@ -1,5 +1,24 @@
 # Validation — 2026-11-08
 
+## Catalog and keyboard revision
+
+All 71 Rust tests, format, Clippy with warnings denied and release build passed.
+The installed binary passed 52 keyboard-only online PTY checks (actual Apple/iTunes
+song/album/artist search and lookup before/after artificial token storage, queue,
+lyrics, actionable settings and quit) and 70 general PTY checks. The checks use
+private XDG/D-Bus and artificial tokens; no Apple account authentication or audio
+is established. Reports: [keyboard](validation/2026-11-08-catalog-keyboard.json),
+[general](validation/2026-11-08-catalog-functional.json),
+[idle](validation/2026-11-08-catalog-idle.json).
+
+New queue edits verify revision and identity; delayed pages require the current
+screen/offset/revision. Independent review findings on focus, stale queries and
+queue-page provenance were fixed with failing-then-passing regressions. The user's
+actual queue and token file were preserved during installation/service restart.
+
+Native token playback is a separate active goal and has **not** been achieved.
+The records below describe earlier revisions.
+
 ## Current native-only revision
 
 Browser controllers, Firefox extension/native-host assets, setup commands and

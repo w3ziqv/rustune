@@ -49,7 +49,7 @@ enum Commands {
         action: String,
         value: Option<String>,
     },
-    /// Search Apple Music (requires an available native catalog backend)
+    /// Search the public Apple catalog (songs, albums or artists; no token required)
     Search {
         term: String,
         #[arg(long, default_value = "songs")]
@@ -241,6 +241,11 @@ async fn doctor(config: &Config, paths: &Paths) -> Result<()> {
     );
     println!("Native playback: unavailable; no playback engine is implemented");
     println!("Audio source quality: unknown");
+    println!(
+        "Public catalog: Apple Search/Lookup metadata, country {} (no token required)",
+        config.catalog_country
+    );
+    println!("Personal library/playlists: account authorization not implemented");
     println!("Lyrics: free LRCLIB; Artwork: public Apple cover URLs");
     println!("XDG runtime: {}", paths.runtime.display());
     println!(

@@ -14,3 +14,5 @@ pub mod mpris;
 pub mod queue;
 pub mod service;
 pub mod ui;
+
+pub mod catalog;

@@ -10,6 +10,7 @@ pub struct Track {
     pub album: String,
     pub duration_ms: u64,
     pub artwork: Option<String>,
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

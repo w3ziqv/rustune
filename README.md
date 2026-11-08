@@ -7,8 +7,8 @@ centered lyrics, progress and mouse/keyboard controls.
 
 **Native Apple Music playback is not implemented.** Saving a Music User Token
 stores a credential locally; it does not verify Apple account acceptance or
-provide a DRM playback engine. Transport, search and library requests explain
-this limitation. Source quality stays unknown. No release tag is published.
+provide a DRM playback engine. Transport requests explain the missing engine. Public search works independently;
+personal library/playlists authorization is still unavailable. Source quality stays unknown. No release tag is published.
 
 Browser playback, browser authorization, extensions and native-messaging setup
 have been removed. Rustune does not start or connect to a browser. Music Assistant
@@ -37,6 +37,11 @@ valid preferences, queue data and token files are preserved.
 
 ## Available features
 
+- Official anonymous Apple/iTunes catalog search for songs, albums and artists,
+  album tracks and artist albums. It works before or after local token storage;
+  it does not establish Apple Music subscription availability. Country defaults
+  to PL and can be changed in Settings. Store links are shown with result metadata.
+
 - Persistent bounded queue: select, add, remove, reorder, repeat/shuffle state,
   pagination and updates from other clients.
 - Free LRCLIB lyrics without an API key: synced/plain/instrumental states,
@@ -59,13 +64,21 @@ EQ, visualizer, crossfade, gapless guarantees and lossless playback are unavaila
 | `L` / `:login` | Enter a token with masked feedback |
 | `:logout` | Remove the local token |
 | `8` / `:queue` | Queue |
-| `j` / `k` | Navigate; scroll lyrics |
+| ↑ / ↓, `j` / `k` | Move within the focused menu/list; scroll lyrics |
+| Enter / → | Open a screen/result or confirm an action |
+| ← / Esc | Back to previous results / navigation menu |
+| Tab | Cycle menu, content and player-button focus; change search type while typing |
+| PgUp / PgDn | Previous / next result or queue page |
+| Alt-← / Alt-→ | Seek when a playback engine is available |
 | `l` / `R` | Preview selected song lyrics / reload |
 | `J` / `K`, Delete | Reorder / remove queue item |
-| PgDn | Next queue page |
 | `:theme monochrome` / `:theme tokyo_night` | Change theme |
 | `:profile minimal` / `balanced` / `enhanced` | Resource profile |
 | `?`, `q`, Ctrl-C | Help / quit |
+
+Settings are selectable with arrows and Enter. Enter on a song opens Lyrics /
+Add to queue / Play actions; unavailable audio is labeled. Player buttons receive
+visible keyboard focus and activate with Enter.
 
 Transport buttons and shortcuts report why native playback is unavailable.
 `daemon = false` (default) stops an automatically created service when the TUI
@@ -86,3 +99,7 @@ tokens. They exercise real public lyrics/artwork, never Apple account acceptance
 or live audio. See [validation](docs/validation.md), [configuration](docs/configuration.md),
 [architecture](docs/architecture.md) and [measurements](docs/benchmarking.md).
 MIT licensed.
+
+The public metadata endpoint is the official [Apple iTunes Search API](https://performance-partners.apple.com/search-api).
+It receives search terms and country, never Music User Tokens. Previews are not
+played. Private Apple Music account data is not substituted with public results.

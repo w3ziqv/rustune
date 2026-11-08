@@ -114,11 +114,11 @@ pub(super) fn render(app: &App, f: &mut Frame, p: Palette) {
     let a = areas(f.area(), art_enabled(app));
     f.render_widget(
         Paragraph::new(format!(
-            " RUSTUNE    [L {}]   [Tab Menu]   [/ Search]   [l Lyrics]",
+            " RUSTUNE    [L {}]   [← Menu] [→ Controls] [Tab focus] [/ Search]",
             if app.token_stored {
                 "Token saved, unverified"
             } else {
-                "Login"
+                "Save token"
             }
         ))
         .style(Style::default().fg(p.fg).bold()),
@@ -134,7 +134,7 @@ pub(super) fn render(app: &App, f: &mut Frame, p: Palette) {
             f.render_widget(ratatui_image::Image::new(image), cover);
         } else {
             let text = if app.displayed_track().is_none() {
-                "\nRUSTUNE\n\nNothing playing\n\nL  Login\n/  Search"
+                "\nRUSTUNE\n\nNothing playing\n\n← Menu · → Controls\n/  Public search"
             } else if key.is_none() {
                 "\nNo artwork reported"
             } else if result.is_some() {
@@ -244,10 +244,23 @@ pub(super) fn render(app: &App, f: &mut Frame, p: Palette) {
             5 => "Mute",
             _ => "Quit",
         };
+        let focused = app.control_focus == Some(i);
+        let block = Block::bordered()
+            .border_style(Style::default().fg(p.fg))
+            .border_type(if focused {
+                ratatui::widgets::BorderType::Double
+            } else {
+                ratatui::widgets::BorderType::Plain
+            });
         f.render_widget(
             Paragraph::new(format!("{title} [{key}]"))
+                .style(if focused {
+                    Style::default().fg(p.fg).bold().underlined()
+                } else {
+                    Style::default().fg(p.fg)
+                })
                 .alignment(Alignment::Center)
-                .block(Block::bordered().border_style(Style::default().fg(p.fg))),
+                .block(block),
             *area,
         );
     }

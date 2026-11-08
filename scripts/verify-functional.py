@@ -57,8 +57,9 @@ with tempfile.TemporaryDirectory(prefix='rustune-functional-') as directory:
         status=lambda:rpc('status')['data']
         check(status()['queue_len']==3,'restored queue')
         check(status()['browser_pid'] is None and not status()['playback_available'],'token does not falsely enable native playback or browser fallback')
-        for command,args in [('play',None),('pause',None),('next',None),('previous',None),('volume',.2),('mute',None),('seek',10),('sleep',60),('browse',{'kind':'library','term':'','next':None})]:
+        for command,args in [('play',None),('pause',None),('next',None),('previous',None),('volume',.2),('mute',None),('seek',10),('sleep',60)]:
             result=rpc(command,args);check(not result['ok'] and 'Native Linux playback' in result['error'],f'{command}: unsupported playback reported explicitly')
+        result=rpc('browse',{'kind':'library','term':'','next':None});check(not result['ok'] and 'Personal library' in result['error'],'personal authorization limitation is distinct from audio availability')
         check(status()['current']==0 and status()['queue_len']==3,'failed playback controls preserve queue')
         prop=subprocess.check_output(['busctl',f'--address={env["DBUS_SESSION_BUS_ADDRESS"]}','get-property','org.mpris.MediaPlayer2.rustune','/org/mpris/MediaPlayer2','org.mpris.MediaPlayer2.Player','CanControl'],env=env)
         check(prop.strip()==b'b false','MPRIS reports unavailable playback honestly')

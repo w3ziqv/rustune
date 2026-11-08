@@ -55,6 +55,7 @@ impl PerformanceMode {
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub performance: PerformanceMode,
+    pub catalog_country: String,
     pub volume: f64,
     pub theme: String,
     pub daemon: bool,
@@ -73,6 +74,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             performance: PerformanceMode::Balanced,
+            catalog_country: default_catalog_country(),
             volume: 0.7,
             theme: "monochrome".into(),
             daemon: false,
@@ -109,9 +111,15 @@ impl Config {
         for key in ["browser", "bridge_port", "headless"] {
             value.remove(key);
         }
-        let c: Self = toml::Value::Table(value)
+        let mut c: Self = toml::Value::Table(value)
             .try_into()
             .context("invalid config TOML")?;
+        ensure!(
+            c.catalog_country.len() == 2
+                && c.catalog_country.bytes().all(|b| b.is_ascii_alphabetic()),
+            "catalog_country must be a two-letter country code"
+        );
+        c.catalog_country.make_ascii_uppercase();
         ensure!(
             c.volume.is_finite() && (0.0..=1.0).contains(&c.volume),
             "volume must be between 0 and 1"
@@ -248,4 +256,8 @@ pub fn private_write(path: &Path, bytes: &[u8]) -> Result<()> {
         let _ = fs::remove_file(tmp);
     }
     result
+}
+
+pub fn default_catalog_country() -> String {
+    "PL".into()
 }

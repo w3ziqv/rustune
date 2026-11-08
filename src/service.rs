@@ -1,8 +1,8 @@
 use crate::{
-    cache::Cache,
+    catalog::Catalog,
     config::{Config, Paths, PerformanceMode, private_write},
     ipc::{Request, read_frame, write_frame},
-    model::{Page, Playback, Repeat, Track},
+    model::{Playback, Repeat, Track},
     queue::Queue,
 };
 use anyhow::{Context, Result, ensure};
@@ -29,6 +29,8 @@ pub struct Status {
     pub repeat: Repeat,
     pub shuffle: bool,
     pub profile: PerformanceMode,
+    #[serde(default = "crate::config::default_catalog_country")]
+    pub catalog_country: String,
     pub pid: u32,
     pub browser_pid: Option<u32>,
     pub backend: String,
@@ -98,7 +100,7 @@ struct Engine {
     paths: Paths,
     queue: Queue,
     playback: Playback,
-    cache: Cache<String, Page>,
+    catalog: Arc<Catalog>,
     history: Vec<String>,
     started: Instant,
     message: String,
@@ -124,7 +126,8 @@ impl Engine {
             .queue
             .current
             .filter(|i| *i < saved.queue.tracks.len());
-        let cap = config.performance.limits().cache_entries;
+        let catalog = Arc::new(Catalog::new()?);
+        catalog.set_capacity(config.performance.limits().cache_entries);
         let playback = Playback {
             volume: config.volume,
             ..Playback::default()
@@ -134,7 +137,7 @@ impl Engine {
             paths,
             queue: saved.queue,
             playback,
-            cache: Cache::new(cap),
+            catalog,
             history: saved.history,
             started: Instant::now(),
             message,
@@ -151,13 +154,14 @@ impl Engine {
             repeat: self.queue.repeat,
             shuffle: self.queue.shuffle,
             profile: self.config.performance,
+            catalog_country: self.config.catalog_country.clone(),
             pid: std::process::id(),
             browser_pid: None,
             backend: "Native playback unavailable".into(),
             playback_available: false,
             browser_shared: false,
             uptime_secs: self.started.elapsed().as_secs(),
-            cache_entries: self.cache.entries.len(),
+            cache_entries: self.catalog.cache_entries(),
             message: self.message.clone(),
             sleep_remaining: None,
         }
@@ -179,10 +183,33 @@ impl Engine {
             Request::Status => return Ok(serde_json::to_value(self.status())?),
             Request::QueuePage { offset } => {
                 return Ok(
-                    json!({"items":self.queue.tracks.iter().skip(offset).take(self.config.performance.limits().page_size).collect::<Vec<_>>(),"offset":offset,"total":self.queue.tracks.len()}),
+                    json!({"items":self.queue.tracks.iter().skip(offset).take(self.config.performance.limits().page_size).collect::<Vec<_>>(),"offset":offset,"total":self.queue.tracks.len(),"revision":self.queue.revision}),
                 );
             }
             Request::History => return Ok(json!(self.history)),
+            Request::RecordSearch(term) => {
+                ensure!(
+                    !term.is_empty() && term.len() <= 512 && !term.chars().any(char::is_control),
+                    "Invalid search history entry"
+                );
+                self.history.retain(|v| v != &term);
+                self.history.insert(0, term);
+                self.history.truncate(50);
+                save = true;
+            }
+            Request::Browse { kind, term, next } => {
+                return Ok(serde_json::to_value(
+                    self.catalog
+                        .browse(
+                            &kind,
+                            &term,
+                            next.as_deref(),
+                            &self.config.catalog_country,
+                            self.config.performance.limits(),
+                        )
+                        .await?,
+                )?);
+            }
             Request::Play
             | Request::Pause
             | Request::Toggle
@@ -191,7 +218,6 @@ impl Engine {
             | Request::Seek(_)
             | Request::Volume(_)
             | Request::Mute
-            | Request::Browse { .. }
             | Request::PlayIndex(_)
             | Request::Enqueue { play: true, .. }
             | Request::Sleep(1..) => {
@@ -226,11 +252,37 @@ impl Engine {
                 );
                 let i = self.queue.tracks.len();
                 self.queue.push(track)?;
+                self.message = "Added to queue".into();
                 if next {
                     let target = self.queue.current.map_or(0, |i| i + 1);
                     self.queue.move_item(i, target);
                 }
                 self.save()?;
+                save = true;
+            }
+            Request::QueueEdit {
+                revision,
+                index,
+                id,
+                to,
+            } => {
+                ensure!(
+                    revision == self.queue.revision
+                        && self
+                            .queue
+                            .tracks
+                            .get(index)
+                            .is_some_and(|track| track.id == id),
+                    "Queue changed; refresh it before editing this track"
+                );
+                if let Some(target) = to {
+                    ensure!(
+                        self.queue.move_item(index, target),
+                        "Queue index out of range"
+                    );
+                } else {
+                    self.queue.remove(index);
+                }
                 save = true;
             }
             Request::Remove(i) => {
@@ -259,8 +311,23 @@ impl Engine {
             }
             Request::Profile(profile) => {
                 self.config.performance = profile;
-                self.cache = Cache::new(profile.limits().cache_entries);
+                self.catalog.set_capacity(profile.limits().cache_entries);
                 self.config.save(&self.paths)?;
+            }
+            Request::Artwork(enabled) => {
+                self.config.artwork = enabled;
+                self.config.save(&self.paths)?;
+            }
+            Request::Lyrics(enabled) => {
+                self.config.lyrics = enabled;
+                self.config.save(&self.paths)?;
+            }
+            Request::CatalogCountry(country) => {
+                let mut config = self.config.clone();
+                config.catalog_country = country;
+                config = Config::parse(&toml::to_string(&config)?)?;
+                config.save(&self.paths)?;
+                self.config = config;
             }
             Request::Stop => self.shutdown = true,
         }
@@ -291,6 +358,12 @@ pub fn validate_track(t: &Track) -> Result<()> {
             .is_none_or(|s| s.len() <= 4096 && s.starts_with("https://")),
         "invalid artwork URL"
     );
+    ensure!(
+        t.url
+            .as_ref()
+            .is_none_or(|url| url.len() <= 2048 && !url.chars().any(char::is_control)),
+        "invalid catalog link"
+    );
     Ok(())
 }
 pub async fn run(config: Config, paths: Paths) -> Result<()> {
@@ -319,6 +392,7 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
     let mut engine = Engine::new(config.clone(), paths.clone())?;
     let (state_tx, state_rx) = watch::channel(engine.status());
     let subscriber = state_rx.clone();
+    let catalog = engine.catalog.clone();
     let mpris = crate::mpris::start(tx.clone(), state_rx).await;
     if mpris.is_err() {
         tracing::warn!("MPRIS unavailable; session D-Bus is required");
@@ -333,7 +407,7 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                 accepted=listener.accept()=>{
                     let Ok((mut s,_))=accepted else{break;};
                     if s.peer_cred().is_err() || s.peer_cred().is_ok_and(|c|c.uid()!=uid){continue;}
-                    let Ok(permit)=permits.clone().try_acquire_owned() else {continue;};let sender=tx.clone();let mut updates=subscriber.clone();
+                    let Ok(permit)=permits.clone().try_acquire_owned() else {continue;};let sender=tx.clone();let mut updates=subscriber.clone();let metadata=catalog.clone();
                     clients.spawn(async move {
                         let _permit=permit;
                         let operation=async {
@@ -352,7 +426,13 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                                 }
                                 return Ok::<(),anyhow::Error>(());
                             }
-                            let r=Reply::result(send(&sender,request).await);write_frame(&mut s,&r).await
+                            let result=if let Request::Browse {kind,term,next}=request {
+                                let status=updates.borrow().clone();
+                                let page=metadata.browse(&kind,&term,next.as_deref(),&status.catalog_country,status.profile.limits()).await;
+                                if page.is_ok() && kind.starts_with("search:") && !term.trim().is_empty() {let _=send(&sender,Request::RecordSearch(term.trim().into())).await;}
+                                page.and_then(|p|serde_json::to_value(p).map_err(Into::into))
+                            } else {send(&sender,request).await};
+                            let r=Reply::result(result);write_frame(&mut s,&r).await
                         };
                         let _=operation.await;
                     });
@@ -421,6 +501,19 @@ mod tests {
         let (_dir, mut e) = engine();
         assert!(e.handle(Request::Next).await.is_err());
         assert_eq!(e.queue.current, Some(0));
+    }
+    #[tokio::test]
+    async fn checked_queue_edits_reject_changed_revision_or_track_identity() {
+        let (_dir, mut engine) = engine();
+        let revision = engine.queue.revision;
+        for (expected, id) in [(revision - 1, "a"), (revision, "b")] {
+            let request:Request=serde_json::from_value(json!({"command":"queue_edit","args":{"revision":expected,"index":0,"id":id,"to":null}})).unwrap();
+            assert!(engine.handle(request).await.is_err());
+            assert_eq!(engine.queue.tracks[0].id, "a");
+        }
+        let request:Request=serde_json::from_value(json!({"command":"queue_edit","args":{"revision":revision,"index":0,"id":"a","to":null}})).unwrap();
+        engine.handle(request).await.unwrap();
+        assert_eq!(engine.queue.tracks[0].id, "b");
     }
     #[tokio::test]
     async fn disabled_playback_commands_explain_missing_engine_without_mutating_queue() {

@@ -11,6 +11,7 @@ pub enum Request {
         offset: usize,
     },
     History,
+    RecordSearch(String),
     Pause,
     Play,
     Toggle,
@@ -33,6 +34,12 @@ pub enum Request {
     },
     PlayIndex(usize),
     Remove(usize),
+    QueueEdit {
+        revision: u64,
+        index: usize,
+        id: String,
+        to: Option<usize>,
+    },
     Move {
         from: usize,
         to: usize,
@@ -40,6 +47,9 @@ pub enum Request {
     Clear,
     Sleep(u64),
     Theme(String),
+    Artwork(bool),
+    Lyrics(bool),
+    CatalogCountry(String),
     Profile(crate::config::PerformanceMode),
     Stop,
 }

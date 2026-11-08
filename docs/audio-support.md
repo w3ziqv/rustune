@@ -4,7 +4,8 @@
 |---|---|
 | Native Apple Music playback | Not implemented |
 | Browser playback, extension, native messaging | Removed |
-| Transport, catalog, library, nonzero sleep timer | Explicit unavailable-capability errors |
+| Public Apple/iTunes catalog metadata | Search songs/albums/artists, album tracks and artist albums; no token required |
+| Transport, personal library/playlists, nonzero sleep timer | Distinct unavailable playback or account-authorization errors |
 | Source codec, bitrate, sample rate, depth, channels, buffer | Unknown |
 | Lossless / Hi-Res, quality selection, EQ, DSP, visualizer | Unavailable |
 | Lyrics | Free LRCLIB LRC/plain/instrumental lookup; wrapped, scrollable silent queue preview |

@@ -2,6 +2,11 @@
 
 ## Unreleased — experimental source
 
+- Public Apple/iTunes catalog search and lookup now work independently of token storage and the missing audio engine.
+- Arrow/Enter menu navigation, keyboard settings, song actions, focused transport buttons and browsing back/pages.
+- Search resets stale focus/results; checked queue edits reject stale track identities/revisions.
+- Personal-library authorization is distinguished from public catalog search and playback availability.
+
 - Linux Ratatui terminal client and private Unix-socket service.
 - Persistent queue, bounded pagination/cache, MPRIS and sleep timer.
 - Latest stable Rust 1.99.1, zbus 6, TOML 1.2 and current compatible dependencies.
