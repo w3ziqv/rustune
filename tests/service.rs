@@ -1,5 +1,5 @@
 use rustune::{
-    config::{BackendKind, Config, Paths, PerformanceMode},
+    config::{Config, Paths, PerformanceMode},
     ipc::{self, Request},
     model::Track,
 };
@@ -25,14 +25,7 @@ async fn real_service_persists_queue_pushes_updates_and_obeys_mpris() {
         runtime: dir.path().join("run/rustune"),
     };
     paths.init().unwrap();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    let config = Config {
-        bridge_port: port,
-        backend: BackendKind::MusicKit,
-        ..Config::default()
-    };
+    let config = Config::default();
     config.save(&paths).unwrap();
     let mut bus = Process(
         Command::new("dbus-daemon")
@@ -121,8 +114,8 @@ async fn real_service_persists_queue_pushes_updates_and_obeys_mpris() {
         .unwrap();
     assert_eq!(page["items"][0]["id"], "c");
     assert!(
-        ipc::request(&paths, &Request::Login).await.is_err(),
-        "no developer token must fail clearly"
+        ipc::request(&paths, &Request::Play).await.is_err(),
+        "missing native engine must fail clearly"
     );
     assert_eq!(
         ipc::request(&paths, &Request::Status).await.unwrap()["browser_pid"],

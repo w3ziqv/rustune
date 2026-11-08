@@ -73,3 +73,11 @@ zero (RSS/PSS zero). This remains an idle/no-audio sample with a warm filesystem
 cache. The [machine-readable sample](validation/2026-11-08-idle.json) records the
 exact values; the separate online PTY scenario exercises real lyrics/artwork,
 but does not measure active streaming or native playback.
+
+## Native-only revision
+
+After browser removal and masked token feedback, the installed release repeated
+the isolated no-audio scenario: RSS 17,272 KiB, PSS 5,878 KiB, zero additional
+CPU ticks over 5.00 s, first frame 10.35 ms, zero owned browser processes.
+See the [exact sample](validation/2026-11-08-native-only-idle.json). Earlier
+browser figures above are historical and do not describe an available feature.

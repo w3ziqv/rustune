@@ -1,32 +1,18 @@
 # Contributing
 
-Rustune is experimental. Start with `docs/architecture.md`, `docs/feasibility.md`
-and `AGENTS.md`. Do not claim live playback, audio quality, or performance that
-has not been measured. Never include credentials, browser profiles or personal
-library data in issues, logs or fixtures.
+Linux, Rust 2024, stable 1.99.1. Read AGENTS.md. Keep memory bounded, private data
+outside the repository, and application code free of unsafe Rust.
 
-Use stable Rust on Linux. Keep changes focused, add behavior tests before fixes,
-and run:
+Run `cargo fmt --all -- --check`, `cargo clippy --all-targets -- -D warnings`,
+`cargo test`, and `cargo build --release`. Queue/config/IPC/capability changes need
+failing-then-passing regressions. Tests require Python 3, D-Bus daemon and busctl.
 
-```sh
-cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-cargo build --release
-```
+Optional online smoke uses `scripts/verify-functional.py` with pyte in a test-only
+virtualenv, isolated XDG paths and private D-Bus. It accesses public LRCLIB/Apple
+artwork, uses an artificial token and never verifies Apple authentication/audio.
+`dbus-run-session -- python3 scripts/verify-login.py target/release/rustune` checks
+real masked CLI/TUI input, private storage, cancellation and service cleanup.
 
-Unit tests do not require Apple credentials. D-Bus integration tests require
-`dbus-daemon` and `busctl`. Opt-in browser tests require Chromium and network:
-
-```sh
-cargo test --test browser -- --ignored --test-threads=1
-```
-
-Those tests check transport, the real public MusicKit library and catalog,
-not a subscribed account's full-song playback. Describe the browser version,
-resource profile, native and browser PSS, and actual subscription/DRM result
-when reporting playback behavior. Do not share tokens or protected streams.
-
-Application code is MIT. No GPL application code is incorporated. Keep third
-party notices and license requirements when distributing dependencies. Browser,
-MusicKit and Widevine are separate components with their own terms.
+The native playback engine is unavailable. Do not claim complete-song playback,
+measured source formats or account acceptance from a local token file or mocked
+protocol. Do not add browser controllers, credential extraction or DRM bypasses.

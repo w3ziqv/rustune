@@ -12,7 +12,6 @@ categories = ["command-line-utilities", "multimedia::audio"]
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-command-fds = "0.3.3"
 crossterm = "0.29"
 fastrand = "2"
 nix = { version = "0.31", features = ["signal", "process", "fs", "user", "poll"] }

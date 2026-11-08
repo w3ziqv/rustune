@@ -83,6 +83,20 @@ impl TokenInput {
         self.text = Zeroizing::new(String::new());
         self.overflow = true;
     }
+    pub fn feedback(&self, max_dots: usize) -> String {
+        if self.overflow {
+            return "Input too long; Ctrl-U clears it".into();
+        }
+        let count = self.text.chars().count();
+        if count == 0 {
+            "No token entered".into()
+        } else {
+            format!(
+                "{}  ({count} characters)",
+                "•".repeat(count.min(max_dots.min(32)))
+            )
+        }
+    }
     pub fn finish(self) -> Result<SecretToken> {
         ensure!(
             !self.overflow,
@@ -102,9 +116,28 @@ pub fn apply(paths: &Paths, job: LocalAuth) -> Result<()> {
     }
 }
 
-pub const SAVED_MESSAGE: &str = "Token saved privately. Apple account acceptance is not verified. Native playback is unavailable in this build.";
+pub const SAVED_MESSAGE: &str = "Token saved locally (0600). Apple account acceptance is not verified. Native playback is unavailable.";
 
 struct RawInput;
+fn feedback_line(input: &TokenInput, width: u16) -> String {
+    let width = if width == 0 { 80 } else { width };
+    let limit = usize::from(width.saturating_sub(1));
+    let prefix = if limit >= 16 { "Token: " } else { "> " };
+    let text = if input.overflow {
+        "Too long; Ctrl-U clears".into()
+    } else if input.text.is_empty() {
+        "No token entered".into()
+    } else {
+        let count = input.text.chars().count();
+        let suffix = format!(" ({count})");
+        let dots = limit
+            .saturating_sub(prefix.len() + suffix.len())
+            .min(32)
+            .min(count);
+        format!("{}{suffix}", "•".repeat(dots))
+    };
+    format!("{prefix}{text}").chars().take(limit).collect()
+}
 impl Drop for RawInput {
     fn drop(&mut self) {
         let _ = execute!(io::stdout(), DisableBracketedPaste);
@@ -120,9 +153,10 @@ pub fn prompt_login(paths: &Paths) -> Result<()> {
     let guard = RawInput;
     execute!(io::stdout(), EnableBracketedPaste)?;
     let mut reader = Reader::new()?;
-    print!("Music User Token (hidden; Enter saves, Esc cancels): ");
-    io::stdout().flush()?;
+    print!("Music User Token (hidden)\r\nEnter saves · Esc cancels · Ctrl-U clears\r\n");
     let mut input = TokenInput::default();
+    print!("{}", feedback_line(&input, terminal::size()?.0));
+    io::stdout().flush()?;
     let token = loop {
         let Some(event) = reader.read_event()? else {
             break None;
@@ -149,6 +183,13 @@ pub fn prompt_login(paths: &Paths) -> Result<()> {
             Event::Overflow => input.reject_paste(),
             _ => {}
         }
+        execute!(
+            io::stdout(),
+            crossterm::cursor::MoveToColumn(0),
+            terminal::Clear(terminal::ClearType::CurrentLine)
+        )?;
+        print!("{}", feedback_line(&input, terminal::size()?.0));
+        io::stdout().flush()?;
     };
     drop(guard);
     println!();

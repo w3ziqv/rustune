@@ -11,8 +11,6 @@ pub enum Request {
         offset: usize,
     },
     History,
-    Login,
-    Logout,
     Pause,
     Play,
     Toggle,

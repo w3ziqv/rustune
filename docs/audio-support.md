@@ -1,30 +1,18 @@
 # Audio capabilities
 
-| Feature | Status |
+| Feature | Current status |
 |---|---|
-| Native Linux playback without browser | Not implemented; default backend disabled |
-| MusicKit full-song playback commands (optional legacy backend) | Implemented; requires live subscription/DRM validation |
-| Play, pause, next/previous, seek, volume, mute | Controller implementation; no fake audio or previews |
-| Auto quality | Enabled; backend chooses the stream |
-| Data Saver, Standard, High Quality presets | Disabled; no verified setter contract |
-| Lossless / Hi-Res Lossless | Disabled; no verified ALAC path |
-| Source codec, bitrate, sample rate, bit depth, channels | Unknown |
-| MusicKit bitrate target | 64/256 kb/s when publicly reported; not measured source bitrate |
-| Buffer occupancy | Unknown |
-| Output device | Explicit legacy browser backend uses its system audio device |
-| EQ, presets, preamp, bass, treble, normalization | Disabled; no verified protected PCM access |
-| Crossfade / gapless | Not implemented or guaranteed |
-| Lyrics | Free LRCLIB lookup, synchronized LRC/plain text/instrumental states, wrapped scrolling |
-| Visualizer | Unavailable; no fabricated audio data |
-| Artwork | Real lazy covers; bounded cache; halfblocks or explicit Kitty/iTerm2 protocol |
+| Native Apple Music playback | Not implemented |
+| Browser playback, extension, native messaging | Removed |
+| Transport, catalog, library, nonzero sleep timer | Explicit unavailable-capability errors |
+| Source codec, bitrate, sample rate, depth, channels, buffer | Unknown |
+| Lossless / Hi-Res, quality selection, EQ, DSP, visualizer | Unavailable |
+| Lyrics | Free LRCLIB LRC/plain/instrumental lookup; wrapped, scrollable silent queue preview |
+| Artwork | Real lazy Apple covers; bounded cache and decode, halfblocks/Kitty/iTerm2 |
+| Local Music User Token | Masked entry, private storage, cancellation/logout; Apple acceptance unverified |
 
-PipeWire/WirePlumber can route and process the browser's output. Rustune does not
-claim that this changes the source encoding. The Audio Settings and Equalizer
-screens explain these limits, rather than presenting ineffective sliders.
-
-No browser is started by the default disabled backend. In the optional dedicated
-Chromium backend, headless mode is the default. EME/audio support varies.
-If it fails, set `headless = false`: the browser runs internally and is minimized
-via CDP after startup/authorization. This mode may briefly show a window and is
-experimental. Never enable `--no-sandbox`, ignore certificate errors or disable
-web security to make playback work.
+Saving a token does not establish a playback engine, subscription entitlement or
+stream quality. No preview or fabricated audio signal is presented as native
+playback. A complete subscribed song must play through a real authorized engine
+before release tagging. PipeWire's output format does not establish the source
+format; there is no PCM path for Rustune DSP in this build.

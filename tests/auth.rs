@@ -53,6 +53,19 @@ fn oversized_paste_cannot_save_a_truncated_token() {
 }
 
 #[test]
+fn masked_feedback_is_bounded_and_never_contains_token_text() {
+    let mut input = TokenInput::default();
+    input.append(&"x".repeat(16 * 1024));
+    let feedback = input.feedback(usize::MAX);
+    assert_eq!(feedback.chars().filter(|c| *c == '•').count(), 32);
+    assert!(feedback.contains("16384 characters") && !feedback.contains('x'));
+    input.append("y");
+    assert!(input.feedback(32).contains("too long"));
+    input.clear();
+    assert_eq!(input.feedback(32), "No token entered");
+}
+
+#[test]
 fn cli_login_prompts_without_echo_and_cancellation_preserves_the_token() {
     let output = std::process::Command::new("python3")
         .arg("scripts/verify-login.py")

@@ -1,6 +1,44 @@
 # Validation — 2026-11-08
 
-## Current implementation
+## Current native-only revision
+
+Browser controllers, Firefox extension/native-host assets, setup commands and
+browser authorization have been removed. Recognized old browser configuration
+migrates atomically while preferences, the queue and the token file remain intact.
+Token entry in CLI/TUI shows at most 32 dots plus an accurate count; Backspace,
+Ctrl-U, paste, save and cancel have real PTY coverage. Local storage remains
+unverified by Apple; **native Apple Music playback is not implemented**.
+
+Final local checks on stable Rust 1.99.1 passed: formatting, Clippy with warnings
+denied, all 54 tests and release build. Three public-network/visual tests remain
+opt-in; obsolete browser tests were removed with the feature. The installed binary
+matches the release SHA-256 in the [native-only functional report](validation/2026-11-08-native-only-functional.json).
+All 70 actual TUI checks passed, including real public LRCLIB/Apple artwork,
+masked typing/paste/editing, cancellation, queue changes and service restart.
+This includes expected unsupported playback errors and verifies no Apple account
+acceptance, subscription entitlement or actual audio.
+
+`verify-login-display.py` first reproduced CLI wrapping at 80 columns. The fix
+uses static instructions and one width-bounded redraw row. The enhanced regression
+then reproduced an incorrect initial dot count; the final version passes visible
+1→2→1→0 dots and long input at 80, 40 and 20 columns. The CLI/TUI login helper also
+passed hidden input, private save, editing, cancel and no leftover test service.
+These scripts use artificial credentials and retain no plaintext secret captures.
+Independent review found no remaining substantive issue after these fixes.
+
+The installed user's idle old service was replaced with the native-only service.
+The verified Rustune native-host registration, generated bridge assets and unused
+bridge lock were removed. The user's queue hash and token inode/mtime/size/mode
+were unchanged. Firefox profiles were not touched. The updated isolated idle
+[sample](validation/2026-11-08-native-only-idle.json) recorded RSS 17,272 KiB,
+PSS 5,878 KiB, zero sampled CPU ticks over 5 seconds and zero owned browsers.
+These are idle measurements, not active playback measurements.
+
+Everything below records earlier revisions and historical browser work; it does
+not describe current functionality or provide supported browser setup steps.
+
+
+## Earlier revision records (before browser removal)
 
 Native Apple Music playback without a browser is **not implemented or verified**.
 The default disables playback with an explicit explanation. It does not start a

@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
     fs,
     io::Write,
-    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
@@ -51,26 +51,12 @@ impl PerformanceMode {
         }
     }
 }
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BackendKind {
-    #[default]
-    Disabled,
-    Auto,
-    Firefox,
-    AppleWeb,
-    MusicKit,
-}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub performance: PerformanceMode,
     pub volume: f64,
     pub theme: String,
-    pub browser: Option<PathBuf>,
-    pub backend: BackendKind,
-    pub bridge_port: u16,
-    pub headless: bool,
     pub daemon: bool,
     pub notifications: bool,
     pub mouse: bool,
@@ -89,10 +75,6 @@ impl Default for Config {
             performance: PerformanceMode::Balanced,
             volume: 0.7,
             theme: "monochrome".into(),
-            browser: None,
-            backend: BackendKind::Disabled,
-            bridge_port: 8973,
-            headless: true,
             daemon: false,
             notifications: false,
             mouse: true,
@@ -109,12 +91,31 @@ impl Default for Config {
 }
 impl Config {
     pub fn parse(s: &str) -> Result<Self> {
-        let c: Self = toml::from_str(s).context("invalid config TOML")?;
+        let mut value: toml::Table = toml::from_str(s).context("invalid config TOML")?;
+        // Recognized retired settings are discarded; all other unknown keys stay errors.
+        if let Some(backend) = value.remove("backend") {
+            ensure!(
+                backend.as_str().is_some_and(|name| [
+                    "disabled",
+                    "auto",
+                    "firefox",
+                    "apple_web",
+                    "music_kit"
+                ]
+                .contains(&name)),
+                "unknown retired backend setting"
+            );
+        }
+        for key in ["browser", "bridge_port", "headless"] {
+            value.remove(key);
+        }
+        let c: Self = toml::Value::Table(value)
+            .try_into()
+            .context("invalid config TOML")?;
         ensure!(
             c.volume.is_finite() && (0.0..=1.0).contains(&c.volume),
             "volume must be between 0 and 1"
         );
-        ensure!(c.bridge_port >= 1024, "bridge_port must be at least 1024");
         ensure!(
             (1..=10_000).contains(&c.max_queue),
             "max_queue must be 1..10000"
@@ -159,7 +160,16 @@ impl Config {
             fs::metadata(&file)?.len() <= 64 * 1024,
             "config file exceeds 64 KiB"
         );
-        Self::parse(&fs::read_to_string(file)?)
+        let text = fs::read_to_string(&file)?;
+        let config = Self::parse(&text)?;
+        let value: toml::Table = toml::from_str(&text)?;
+        if ["backend", "browser", "bridge_port", "headless"]
+            .iter()
+            .any(|key| value.contains_key(*key))
+        {
+            config.save(paths)?;
+        }
+        Ok(config)
     }
     pub fn save(&self, paths: &Paths) -> Result<()> {
         private_write(
@@ -195,40 +205,13 @@ impl Paths {
         })
     }
     pub fn init(&self) -> Result<()> {
-        for p in [
-            &self.config,
-            &self.data,
-            &self.cache,
-            &self.runtime,
-            &self.data.join("browser"),
-        ] {
+        for p in [&self.config, &self.data, &self.cache, &self.runtime] {
             private_dir(p)?;
         }
         Ok(())
     }
     pub fn socket(&self) -> PathBuf {
         self.runtime.join("service.sock")
-    }
-    pub fn token(&self) -> Result<String> {
-        let p = self.config.join("developer-token");
-        let m=fs::symlink_metadata(&p).context("create ~/.config/rustune/developer-token with your MusicKit developer token (chmod 600)")?;
-        ensure!(
-            m.is_file() && !m.file_type().is_symlink() && m.mode() & 0o077 == 0,
-            "developer-token must be a regular private file (chmod 600)"
-        );
-        ensure!(
-            m.uid() == fs::metadata(&self.config)?.uid(),
-            "developer-token ownership differs from config directory"
-        );
-        ensure!(m.len() <= 16 * 1024, "developer-token too large");
-        let token = fs::read_to_string(p)?.trim().to_owned();
-        ensure!(
-            token.split('.').count() == 3
-                && token.len() > 40
-                && !token.chars().any(char::is_whitespace),
-            "developer-token must contain one MusicKit JWT"
-        );
-        Ok(token)
     }
 }
 

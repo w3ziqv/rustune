@@ -1,240 +1,88 @@
 # Rustune
 
-A native Rust Apple Music terminal controller for Linux, built with Ratatui.
+Experimental Linux Apple Music TUI, written in Rust 2024 with Ratatui.
+Default appearance: black background, white text and borders; optional Tokyo Night
+and other palettes. The player composition uses large real artwork, metadata,
+centered lyrics, progress and mouse/keyboard controls.
 
-**Experimental. Native Apple Music playback without a browser is not implemented.**
-The target is an independent Rust player using the listener's own credentials,
-with no Music Assistant dependency. A Music User Token authenticates an account;
-it does not supply a Linux DRM playback engine. The default backend is disabled
-and never starts a browser fallback. See [native feasibility](docs/feasibility.md).
+**Native Apple Music playback is not implemented.** Saving a Music User Token
+stores a credential locally; it does not verify Apple account acceptance or
+provide a DRM playback engine. Transport, search and library requests explain
+this limitation. Source quality stays unknown. No release tag is published.
 
-Optional legacy Firefox/MusicKit and Chromium controllers remain available when
-explicitly selected. Earlier interactive testing completed a subscribed 113-second
-song through Firefox 159.0.1 on Arch Linux, with preview mode false. That validates
-the browser controller only, not native decoding or this updated build. TUI
-pause/resume and authorized personal reads were also observed. Remaining controls
-have automated coverage; live MPRIS/next/previous/sleep verification is incomplete.
+Browser playback, browser authorization, extensions and native-messaging setup
+have been removed. Rustune does not start or connect to a browser. Music Assistant
+is not a dependency.
 
-## Implemented
+## Install
 
-- Native terminal UI with responsive large/compact layouts, visible list slices,
-  search input, queue, progress/volume and explicit capability screens.
-- Real catalog song/album/artist/playlist search and paginated library, album,
-  artist, playlist and recent-content request paths. Personal data requires
-  authorization; these request paths were verified on an authorized account.
-- MusicKit full-song commands, authorization/preview guards, play/pause,
-  next/previous, seek, volume and mute. Full-song playback was verified with the Firefox bridge.
-- Persistent bounded queue, add/play-next/remove/reorder/clear, shuffle, repeat
-  and sleep timer. Queue selection commits after playback success.
-- Private playback service, reconnecting TUI/CLI, MPRIS metadata and controls,
-  optional desktop notifications, XDG configuration and atomic private state.
-- Pure black/white default, optional Tokyo Night and other themes, custom colors,
-  configurable keybindings, mouse navigation,
-  command palette and Help. Three real resource profiles vary cache/page/update
-  limits; idle UI redraws are event-driven.
-- Lazy real album artwork in Now Playing and wide layouts, with bounded image
-  cache and halfblock/Kitty/iTerm2 rendering. Minimal mode disables artwork.
-- Clearly labeled MusicKit bitrate target when reported; source format stays unknown.
-- `doctor`, `stats`, `benchmark`, CLI/SSH controls and systemd example.
-- Bounded IPC, private files/socket, peer UID checking, session locks, no own
-  telemetry and credential-free logging.
-
-## Install on Arch Linux
-
-Use stable Rust 1.99.1 and D-Bus. Firefox, protected-content support, a subscription
-and an audio stack are needed only for the optional browser controller. Rustune
-itself does not decode DRM audio.
+Linux, stable Rust 1.99.1 (minimum 1.99), D-Bus, and a UTF-8 terminal:
 
 ```sh
-git clone https://github.com/w3ziqv/rustune.git
-cd rustune
-cargo build --locked --release
+cargo build --release
 install -Dm755 target/release/rustune ~/.local/bin/rustune
+rustune init
+rustune login
 rustune
 ```
 
-Add `~/.local/bin` to PATH if needed. The current minimum Rust version is 1.99; the toolchain is pinned to 1.99.1.
-See [installation](docs/installation.md).
+Login shows bounded dots and a character count while you type or paste. Backspace
+removes a character; Ctrl-U clears; Enter saves; Esc cancels. The token is never
+echoed. The explicit outcome says whether private local storage succeeded; it
+never claims remote authentication. `rustune logout` removes the saved local file.
 
-## Token login
+Files follow XDG directories. The token is `~/.config/rustune/music-user-token`
+with mode 0600. Old browser-specific configuration is discarded on load while
+valid preferences, queue data and token files are preserved.
 
-Run `rustune login`, paste your **Music User Token** into the hidden prompt, and
-press Enter. In the TUI, press `L` or enter `:login`. Esc cancels; Ctrl-U clears.
-The token is saved atomically to `~/.config/rustune/music-user-token` with mode
-0600. It never enters command arguments, command history or service IPC.
-`rustune logout` / `:logout` remove this local file.
+## Available features
 
-**This implements local credential entry/storage, not verified account sign-in
-or native playback.** The outcome says account acceptance is unverified; the
-native Linux DRM engine is still unavailable. No browser fallback is started.
+- Persistent bounded queue: select, add, remove, reorder, repeat/shuffle state,
+  pagination and updates from other clients.
+- Free LRCLIB lyrics without an API key: synced/plain/instrumental states,
+  wrapping, manual scrolling, retry and a bounded cache. Select a saved queue
+  song and press `l` for a silent lyrics/cover preview.
+- Lazy bounded album artwork from Apple image URLs, rendered using half blocks
+  or explicit Kitty/iTerm2 protocols. Minimal mode disables artwork.
+- Private Unix-socket service, configurable keys/themes and MPRIS capabilities
+  that accurately report unavailable playback.
 
-The main player follows the selected amcli-style composition: large album cover
-left, metadata and centered lyrics right, progress and bordered controls below.
-Tab opens navigation. Existing black/white and optional theme choices remain.
-
-## Optional legacy Firefox setup
-
-These steps explicitly select browser playback; they do not provide native playback.
-
-1. Keep your signed-in `https://music.apple.com/` tab open in Firefox 128+.
-2. Run `rustune firefox-setup`.
-3. Open `about:debugging#/runtime/this-firefox`, choose **Load Temporary Add-on…**,
-   and select `~/.local/share/rustune/firefox/manifest.json`. Ctrl+L in the file
-   picker accepts its absolute path. Allow access to the Apple Music host when
-   prompted.
-4. Run `rustune login --browser`, then `rustune`.
-
-The development add-on is removed by Firefox restart. A permanent add-on needs
-Mozilla signing; signing enforcement is never disabled. After updating add-on
-files, use **Reload** on its debugging card. Click its toolbar action to reconnect
-if the pinned music tab was closed. See [Firefox details](docs/firefox.md).
-
-The optional browser controllers keep their own official authorization.
-`rustune login --browser` or `:connect-browser` explicitly connects them; local
-token login does not. For the
-optional `music_kit` backend, a MusicKit **developer JWT** is a separate credential
-stored privately at `~/.config/rustune/developer-token` with mode 0600. Follow
-[Apple's token documentation](https://developer.apple.com/documentation/applemusicapi/generating-developer-tokens);
-never put a private key or Apple ID password in the repository or chat.
+LRCLIB receives only song title, artist, album and duration. Coverage varies;
+missing lyrics are reported honestly. No Apple credentials are sent to LRCLIB
+or artwork hosts. No generated artwork or invented audio quality is substituted.
+EQ, visualizer, crossfade, gapless guarantees and lossless playback are unavailable.
 
 ## Controls
 
 | Key | Action |
 |---|---|
-| Space | Play/pause |
-| n / p | Next / previous |
-| / | Search; F2 selects resource type while typing |
-| j / k, Enter | Navigate / play or open |
-| Tab, Esc | Switch panel / navigation |
-| + / -, m | Volume / mute |
-| Left / Right | Seek 10 seconds |
-| a / A | Add to queue / play next |
-| Delete, J / K | Remove / reorder queue item |
-| PgDn | Next result/queue page |
-| s / r | Shuffle / repeat |
-| L | Hidden local token login |
-| l / R | Lyrics / reload lyrics |
-| e / v | EQ / visualizer capability explanation |
-| , / ? | Settings / Help |
-| : | Command palette |
-| q, Ctrl-C | Quit terminal client |
+| `L` / `:login` | Enter a token with masked feedback |
+| `:logout` | Remove the local token |
+| `8` / `:queue` | Queue |
+| `j` / `k` | Navigate; scroll lyrics |
+| `l` / `R` | Preview selected song lyrics / reload |
+| `J` / `K`, Delete | Reorder / remove queue item |
+| PgDn | Next queue page |
+| `:theme monochrome` / `:theme tokyo_night` | Change theme |
+| `:profile minimal` / `balanced` / `enhanced` | Resource profile |
+| `?`, `q`, Ctrl-C | Help / quit |
 
-Commands include `:login`, `:logout`, `:profile minimal`, `:theme nord`,
-`:sleep 30` (minutes), `:sleep 0`, `:recent`, `:history`, `:clear`, `:queue`.
-All standard bindings are configurable. Help shows the action names.
+Transport buttons and shortcuts report why native playback is unavailable.
+`daemon = false` (default) stops an automatically created service when the TUI
+closes. An already running service is preserved. Use `rustune ctl stop` to stop
+it deliberately, or `rustune daemon` to run it in the foreground.
 
-```text
- RUSTUNE / Home    Balanced
-──────────────────────────────────────────────────────────
- • Home          │ YOUR MUSIC. YOUR TERMINAL.
-   Now Playing   │
-   Search        │ Native MusicKit controls in your terminal
-   Library       │
-   Queue         │ / Search · Tab navigation · ? Help
-──────────────────────────────────────────────────────────
- No track playing                              vol 70%
-                     0:00 / 0:00
-```
-
-This compact terminal example illustrates the layout. `rustune render --width
-100 --height 28` produces an actual current screen without invented track data.
-
-## Configuration and service
-
-Configuration lives at `~/.config/rustune/config.toml`. Data, private browser
-profiles and search/queue state use XDG data directories. See
-[configuration](docs/configuration.md).
-
-```toml
-backend = "disabled"
-performance = "balanced"
-theme = "monochrome"
-artwork = true
-lyrics = true
-artwork_protocol = "auto"
-volume = 0.7
-daemon = true
-```
-
-`daemon = true` keeps an automatically started service alive when the TUI closes.
-A TUI connected to an existing service leaves it running. `rustune daemon` runs
-in the foreground for systemd. The Firefox tab/browser still needs to be open.
-
-```sh
-rustune doctor
-rustune status
-rustune ctl pause
-rustune ctl volume 0.5
-rustune ctl seek 20
-rustune ctl sleep 1800  # CLI units are seconds
-rustune stats --seconds 5
-rustune benchmark --seconds 30
-rustune ctl stop
-```
-
-SSH to the same host/user can run the CLI. MPRIS uses
-`org.mpris.MediaPlayer2.rustune` for compatible media keys, playerctl and Waybar.
-No network control API is enabled.
-
-## Audio limits and planned features
-
-Only **Auto** quality is enabled. Codec, source bitrate, sample rate, bit depth,
-channels and buffer status remain **Unknown** without reliable information.
-Lossless/Hi-Res Lossless and explicit quality presets are disabled. PipeWire's
-output format does not establish the source encoding. MusicKit targets of 64/256
-kb/s are labeled as targets, never measured source bitrate.
-
-EQ, preamp, bass/treble, normalization, crossfade, gapless guarantees
-and a real visualizer are not implemented. Their screens explain why.
-
-Free LRCLIB lyrics work without an API key. Requests send the track title, artist,
-album and duration to LRCLIB, never Apple credentials. Synced LRC follows reported
-playback position; plain-text and instrumental records have distinct states.
-Lyrics wrap, scroll and use a bounded cache. From Queue, highlight a saved song
-and press l to preview its lyrics without starting playback. `lyrics = false`
-disables lookup.
-Coverage depends on LRCLIB; no match is reported honestly, never substituted with
-a different song. See [lyrics details](docs/lyrics.md).
-Real artwork is rendered lazily from Apple image hosts when the connected backend
-reports its URL. No generated artwork is substituted. `auto` uses portable
-halfblocks; image protocols can be selected explicitly.
-Favorites browsing has no verified public endpoint integration here. Direct
-output-device/buffer controls are external PipeWire tools. These are limitations,
-not working features behind decorative controls.
-
-See [audio support](docs/audio-support.md), [feasibility research](docs/feasibility.md)
-and [validation evidence](docs/validation.md).
-
-## Resources and privacy
-
-Chromium starts lazily and is reused. The Firefox backend attaches to a user-owned
-session. `stats` reports native, browser and total RSS/PSS separately; **shared
-Firefox includes all its tabs**, not just incremental Rustune cost. CPU is sampled
-from `/proc`, not guessed. See [measurements](docs/benchmarking.md); active playback
-and long-session numbers require actual playback and are not fabricated.
-
-Rustune adds no telemetry, ads or analytics. Apple's website, MusicKit, browser
-and DRM components have their own networking and privacy behavior. Account
-cookies stay in Firefox or the dedicated Chromium profile. Protect these private
-directories and exclude them from public backups. Logout uses MusicKit
-unauthorization; it does not promise an Apple ID-wide sign-out.
-
-## Develop
+## Validation
 
 ```sh
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 cargo build --release
-# Opt-in real browser/CDN/catalog checks; no account playback assertion:
-cargo test --test browser -- --ignored --test-threads=1
-# Firefox extension contract test (Node 18+; mocked extension APIs only):
-node tests/extension.mjs
-node tests/musickit.mjs
 ```
 
-D-Bus tests need `dbus-daemon` and `busctl`. CI runs formatting, Clippy, tests and
-release validation. See [architecture](docs/architecture.md),
-[contributing](CONTRIBUTING.md), [skill record](docs/skills.md), and [AGENTS.md](AGENTS.md).
-MIT-licensed application code; MusicKit, browsers and Widevine remain separate
-components with their own terms. No third-party player application code is copied.
+Optional network/PTY tests use isolated XDG paths, private D-Bus and artificial
+tokens. They exercise real public lyrics/artwork, never Apple account acceptance
+or live audio. See [validation](docs/validation.md), [configuration](docs/configuration.md),
+[architecture](docs/architecture.md) and [measurements](docs/benchmarking.md).
+MIT licensed.

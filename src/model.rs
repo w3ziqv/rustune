@@ -33,13 +33,13 @@ pub struct Playback {
     pub volume: f64,
     pub track: Option<Track>,
     pub preview: bool,
-    /// MusicKit's configured/adaptive target, never a measured source bitrate.
+    /// An explicitly reported target, never a measured source bitrate.
     pub target_bitrate_kbps: Option<u16>,
 }
 impl Playback {
     pub fn quality_label(&self) -> String {
         match self.target_bitrate_kbps {
-            Some(n @ (64 | 256)) => format!("MusicKit target {n} kb/s · source quality unknown"),
+            Some(n @ (64 | 256)) => format!("Reported target {n} kb/s · source quality unknown"),
             _ => "Source quality unknown".into(),
         }
     }

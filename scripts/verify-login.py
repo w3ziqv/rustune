@@ -24,11 +24,13 @@ with tempfile.TemporaryDirectory(prefix='rustune-login-') as d:
             process.wait(timeout=2);drain()
             assert process.returncode==0,'login exited unsuccessfully'
             assert token not in captured,'token was echoed to terminal output'
+            if data.endswith(b'\r'):
+                assert '•••'.encode() in captured,'CLI did not show masked typing feedback'
             assert b'not verified' in captured or b'cancelled' in captured,'missing honest login outcome'
         finally:
             if process.poll() is None:process.kill();process.wait()
             os.close(master)
-    run(token+b'\r')
+    run(b'discard\x15'+token+b'X\x7f\r')
     file=Path(env['XDG_CONFIG_HOME'])/'rustune/music-user-token'
     assert file.read_bytes()==token
     assert file.stat().st_mode&0o777==0o600

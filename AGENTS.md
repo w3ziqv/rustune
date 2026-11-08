@@ -8,11 +8,9 @@ raw backend errors containing personal data. No credentials in this repository.
 The target is native playback using user-supplied credentials, without a browser
 process or a Music Assistant dependency. Music Assistant is research only.
 Do not claim that a Music User Token supplies a native DRM playback engine.
-The existing Firefox/MusicKit backends are legacy, explicitly selected options;
-never extract their tokens. The optional local MusicKit host uses a user-supplied
-developer token. Browser IPC must
-use private inherited pipes, never a public debugging port. Own browser processes
-and clean them up. Never disable the sandbox, web security or certificate checks.
+Do not add browser playback, extensions, native messaging or browser login.
+Credentials are user supplied and stay local. Token entry must visibly show bounded
+masked feedback; saving a token never implies remote authentication.
 
 Distinguish implemented behavior from verified live playback. No release tag
 until a subscribed account has played a complete song through the real backend.
@@ -21,8 +19,8 @@ Unknown audio formats stay unknown; unsupported controls must explain why.
 Validation: `cargo fmt --all -- --check`,
 `cargo clippy --all-targets -- -D warnings`, `cargo test`,
 `cargo build --release`. Use TDD for queue, config, IPC and capability logic.
-Run browser smoke tests separately from unit tests; they must not pretend to
-verify Apple authentication or playback. Record actual RSS/PSS and CPU
+Run online lyrics/artwork and PTY smoke separately from unit tests; they must
+not pretend to verify Apple authentication or playback. Record actual RSS/PSS and CPU
 measurements including every owned browser subprocess.
 
 Default appearance: pure black background and white text/borders. Tokyo Night is

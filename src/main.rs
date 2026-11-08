@@ -24,16 +24,9 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Commands {
-    /// Diagnose dependencies, private file permissions and MusicKit readiness
+    /// Diagnose private token storage and native playback capabilities
     Doctor,
-    /// Install the local Firefox bridge files and print temporary add-on setup
-    FirefoxSetup,
-    #[command(hide = true)]
-    NativeHost {
-        #[arg(trailing_var_arg = true)]
-        browser_args: Vec<String>,
-    },
-    /// Measure native/browser RSS, PSS and sampled CPU as JSON
+    /// Measure application RSS, PSS and sampled CPU as JSON
     Stats {
         #[arg(long, default_value_t = 1)]
         seconds: u64,
@@ -45,16 +38,10 @@ enum Commands {
     },
     /// Run the private playback service in the foreground
     Daemon,
-    /// Enter a Music User Token privately; --browser explicitly authorizes the legacy backend
-    Login {
-        #[arg(long)]
-        browser: bool,
-    },
-    /// Remove the saved local Music User Token; --browser revokes legacy MusicKit authorization
-    Logout {
-        #[arg(long)]
-        browser: bool,
-    },
+    /// Enter a Music User Token with masked feedback and store it privately
+    Login,
+    /// Remove the saved local Music User Token
+    Logout,
     /// Print current service state as JSON
     Status,
     /// Send a terminal/SSH control: play, pause, toggle, next, previous, mute, seek, volume, shuffle, repeat, sleep, clear, stop
@@ -62,7 +49,7 @@ enum Commands {
         action: String,
         value: Option<String>,
     },
-    /// Search the real Apple Music catalog through the configured browser
+    /// Search Apple Music (requires an available native catalog backend)
     Search {
         term: String,
         #[arg(long, default_value = "songs")]
@@ -91,24 +78,11 @@ async fn main() -> Result<()> {
     let paths = Paths::discover()?;
     let config = Config::load(&paths)?;
     match cli.command {
-        Some(Commands::Login { browser: false }) => rustune::auth::prompt_login(&paths)?,
-        Some(Commands::Logout { browser: false }) => {
+        Some(Commands::Login) => rustune::auth::prompt_login(&paths)?,
+        Some(Commands::Logout) => {
             rustune::auth::remove_user_token(&paths)?;
             println!(
-                "Local Music User Token removed. Browser/account authorization was not changed."
-            );
-        }
-        Some(Commands::NativeHost { browser_args }) => {
-            rustune::backend::firefox::native_host(paths, &browser_args).await?
-        }
-        Some(Commands::FirefoxSetup) => {
-            let manifest = rustune::backend::firefox::setup(&paths)?;
-            let mut config = config;
-            config.backend = rustune::config::BackendKind::Firefox;
-            config.save(&paths)?;
-            println!(
-                "Open about:debugging#/runtime/this-firefox in Firefox → Load Temporary Add-on → {}",
-                manifest.display()
+                "Local Music User Token removed. Apple account authorization was not changed."
             );
         }
         Some(Commands::Doctor) => doctor(&config, &paths).await?,
@@ -166,8 +140,6 @@ async fn main() -> Result<()> {
             let mut child = ensure_service(&paths).await?;
             if let Some(command) = command {
                 let request = match command {
-                    Commands::Login { browser: true } => Request::Login,
-                    Commands::Logout { browser: true } => Request::Logout,
                     Commands::Status => Request::Status,
                     Commands::Ctl { action, value } => control(&action, value.as_deref())?,
                     Commands::Search { term, kind } => Request::Browse {
@@ -258,67 +230,19 @@ async fn doctor(config: &Config, paths: &Paths) -> Result<()> {
         env!("CARGO_PKG_VERSION"),
         std::env::consts::ARCH
     );
-    println!("Configured backend: {:?}", config.backend);
-    println!(
-        "Firefox bridge: {}",
-        if paths.runtime.join("firefox.sock").exists() {
-            "native host socket exists; controller/account acceptance unverified"
-        } else {
-            "not connected; run rustune firefox-setup and load its add-on"
-        }
-    );
-    println!(
-        "Optional Chromium browser: {}",
-        rustune::backend::musickit::browser_binary(config)
-            .map_or("MISSING".into(), |p| p.display().to_string())
-    );
-    println!(
-        "MusicKit developer token: {}",
-        if paths.token().is_ok() {
-            "private JWT file present (server acceptance unverified)"
-        } else {
-            "not configured; optional for Firefox, required for music_kit backend"
-        }
-    );
+    println!("Profile: {:?}", config.performance);
     println!(
         "Music User Token: {}",
-        if paths.config.join("music-user-token").exists() {
-            "local file present; account acceptance not verified; separate from developer JWT"
+        if rustune::auth::has_user_token(paths) {
+            "private local file present; Apple account acceptance NOT VERIFIED"
         } else {
-            "managed by official browser sign-in"
+            "not saved; run rustune login"
         }
     );
+    println!("Native playback: unavailable; no playback engine is implemented");
+    println!("Audio source quality: unknown");
+    println!("Lyrics: free LRCLIB; Artwork: public Apple cover URLs");
     println!("XDG runtime: {}", paths.runtime.display());
-    println!(
-        "Display: {}",
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            "Wayland"
-        } else if std::env::var_os("DISPLAY").is_some() {
-            "X11"
-        } else {
-            "none; browser sign-in needs a graphical session"
-        }
-    );
-    for (name, args) in [("pw-cli", vec!["info", "0"]), ("wpctl", vec!["status"])] {
-        let check = tokio::time::timeout(
-            Duration::from_secs(3),
-            tokio::process::Command::new(name)
-                .args(args)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .kill_on_drop(true)
-                .status(),
-        )
-        .await;
-        println!(
-            "{name}: {}",
-            if matches!(check,Ok(Ok(s)) if s.success()) {
-                "available and responding"
-            } else {
-                "unavailable or not responding"
-            }
-        );
-    }
     println!(
         "Session D-Bus: {}",
         if zbus::Connection::session().await.is_ok() {
@@ -327,36 +251,12 @@ async fn doctor(config: &Config, paths: &Paths) -> Result<()> {
             "unavailable"
         }
     );
-    let widevine = [
-        "/usr/lib/chromium/WidevineCdm",
-        "/opt/google/chrome/WidevineCdm",
-        "/usr/lib/chromium/libwidevinecdm.so",
-    ]
-    .iter()
-    .any(|p| std::path::Path::new(p).exists());
-    println!(
-        "Widevine: {}",
-        if widevine {
-            "installation found; actual EME playback still needs verification"
-        } else {
-            "not found at common paths; verify your browser's protected-content support"
-        }
-    );
-    println!(
-        "Audio: Auto only; codec/bitrate/bit-depth unknown; free LRCLIB lyrics enabled; lossless/DSP/visualizer unavailable"
-    );
     if let Ok(v) = ipc::request(paths, &Request::Status).await {
-        let s: Status = serde_json::from_value(v)?;
-        println!(
-            "Service: PID {}; browser {:?}; MusicKit authorized {}",
-            s.pid, s.browser_pid, s.playback.authorized
-        );
+        let status: Status = serde_json::from_value(v)?;
+        println!("Service: PID {}; {}", status.pid, status.backend);
     } else {
-        println!("Service: not running (launch is lazy)");
+        println!("Service: not running");
     }
-    println!(
-        "Live full-song playback: NOT VERIFIED by doctor; authorization alone does not establish an active subscription or DRM compatibility."
-    );
     Ok(())
 }
 async fn benchmark(paths: &Paths, seconds: u64) -> Result<()> {

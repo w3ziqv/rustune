@@ -11,9 +11,11 @@
 - Large-cover player layout based on the selected amcli composition.
 - Pure black background and white text/borders; optional Tokyo Night and other themes.
 - Bounded lazy album covers and explicit terminal image protocols.
-- MusicKit bitrate targets distinguished from unknown source quality.
+- Reported bitrate targets distinguished from unknown source quality.
 - Native playback is unavailable; default backend disabled with no browser fallback.
-- Explicit legacy Firefox/MusicKit and Chromium controllers retained.
+- Removed browser playback/login, extension/native-host assets and setup commands.
+- CLI/TUI token input now shows bounded dots/count with editing and explicit local-save feedback.
+- Retired browser configuration migrates while preferences, queue and tokens are preserved.
 - Fixed immediate manual lyrics scrolling, including after terminal resizing.
 - Open queue follows external additions/reordering and returns to a valid page after shrink.
 - Reproducible isolated PTY functional smoke with public covers/lyrics and explicit no-audio scope.

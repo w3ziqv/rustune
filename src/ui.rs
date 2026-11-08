@@ -323,7 +323,6 @@ impl App {
                 self.auth_job = Some(LocalAuth::Remove);
                 return Ok(None);
             }
-            "connect-browser" => Request::Login,
             "play" => Request::Play,
             "pause" => Request::Pause,
             "next" => Request::Next,
@@ -686,7 +685,12 @@ impl App {
             let modal = Rect::new(a.x + (a.width - w) / 2, a.y + (a.height - h) / 2, w, h);
             let p = palette(&self.config);
             f.render_widget(Clear, modal);
-            f.render_widget(Paragraph::new("Paste token (hidden)\n\nMusic User Token\n[ input is never displayed ]\n\nEnter save · Esc cancel · Ctrl-U clear\n\nStorage is local; account acceptance is not verified.")
+            let feedback = self
+                .token_input
+                .as_ref()
+                .map(|input| input.feedback(32))
+                .unwrap_or_default();
+            f.render_widget(Paragraph::new(format!("Paste token (hidden)\n\nMusic User Token\n{feedback}\n\nEnter save · Esc cancel · Ctrl-U clear\n\nStorage is local; account acceptance is not verified."))
                 .style(Style::default().fg(p.fg).bg(p.bg)).wrap(Wrap{trim:false})
                 .block(Block::bordered().title(" LOGIN ").border_style(Style::default().fg(p.fg)).padding(Padding::horizontal(1))),modal);
         }
@@ -828,10 +832,10 @@ impl App {
                 s.map_or(0, |s| s.queue_len),
                 s.map_or(crate::model::Repeat::Off, |s| s.repeat),
                 s.is_some_and(|s| s.shuffle),
-                if s.and_then(|s| s.browser_pid).is_some() {
-                    "Browser connected"
+                if self.token_stored {
+                    "Token saved locally · account unverified"
                 } else {
-                    "No playback process connected"
+                    "L  Enter Music User Token"
                 }
             );
             f.render_widget(
@@ -955,7 +959,7 @@ impl App {
                     Paragraph::new(if self.screen == 2 {
                         "Press / to search. F2 changes songs / albums / artists / playlists."
                     } else {
-                        "No items loaded. :connect-browser connects the optional legacy backend. L saves a local token."
+                        "No items loaded. L enters a token. Native catalog access is not implemented."
                     })
                     .style(Style::default().fg(p.muted))
                     .wrap(Wrap { trim: false }),
@@ -1001,12 +1005,13 @@ impl App {
             return;
         }
         let text=match self.screen {
-            0=>format!("YOUR MUSIC. YOUR TERMINAL.\n\n{}\n\nTab switches navigation focus. 1–9 open screens.\n/ Search · Enter play/open · a Add to queue\n:theme monochrome | tokyo_night changes the palette.\n:profile minimal disables artwork and reduces caches.\n\nEXPERIMENTAL · See Audio Settings for available capabilities.",if self.config.backend==crate::config::BackendKind::Disabled {"Native Apple Music playback is not available in this build.\nA Music User Token alone does not provide a playback engine.\nNo browser backend is started by default."}else{"An optional browser playback backend is configured.\n:connect-browser connects it; / searches Apple Music.\nA subscription and compatible protected-content support are required."}),
+            0=>"YOUR MUSIC. YOUR TERMINAL.\n\nNative Apple Music playback is not implemented in this build.\nL enters a Music User Token; saving it does not verify account acceptance.\n\nTab switches navigation focus. 1–9 open screens.\n:theme monochrome | tokyo_night changes the palette.\n:profile minimal disables artwork and reduces caches.\n\nEXPERIMENTAL · See Audio Settings for available capabilities.".into(),
+
             1=>self.status.as_ref().and_then(|s|s.playback.track.as_ref()).map_or("Nothing playing. No audio quality has been reported.".into(),|t|format!("NOW PLAYING\n\n{}\n{}\n{}\n\n{}\n\nSpace  Play/pause\n← / →  Seek 10 seconds\n+ / -  Volume\nn / p  Next / previous\ns      Shuffle\nr      Repeat\nm      Mute\n\n:sleep MINUTES sets a sleep timer (0 cancels).",t.title,t.artist,t.album,self.status.as_ref().map(|s|s.playback.quality_label()).unwrap_or_default())),
 
             9=>"EQUALIZER · UNAVAILABLE\n\n31  62  125  250  500  1k  2k  4k  8k  16k Hz\n\nProtected playback does not expose a verified PCM signal to Rustune.\nEQ, preamp, bass, treble, normalization, crossfade and visualizer are disabled.\n\nUse your existing PipeWire DSP chain (for example EasyEffects) externally.\nNo processing or gapless guarantees are claimed.".into(),
-            10=>format!("AUDIO SETTINGS\n\n● Auto               Backend chooses stream quality\n○ Data Saver         Unavailable\n○ Standard           Unavailable\n○ High Quality       Unavailable\n○ Lossless           Unavailable\n○ Hi-Res Lossless    Unavailable\n\nBackend: {}\n{}\n\nSource codec        Unknown\nSource sample rate  Unknown\nSource bit depth    Unknown\nSource channels     Unknown\nBuffer status       Unknown\n\nThe MusicKit target is a requested/adaptive rate, not a measurement.\nPipeWire output format does not establish source quality.",self.status.as_ref().map_or("No playback process",|s|s.backend.as_str()),self.status.as_ref().map_or("Source quality unknown".into(),|s|s.playback.quality_label())),
-            11=>format!("SETTINGS\n\nTheme: {}\nResources: {:?}\n\n:theme dark | light | catppuccin_mocha | catppuccin_latte\n:theme gruvbox | nord | monochrome | tokyo_night | custom\n:profile minimal | balanced | enhanced\n\n~/.config/rustune/config.toml\nKeybindings, custom colors, Chromium path, notifications, mouse\nand daemon behavior can be configured there.\n\n:login  :logout  :sleep MINUTES  :clear  :history\nDaemon mode keeps playback running when the TUI closes.",self.config.theme,self.status.as_ref().map_or(self.config.performance,|s|s.profile)),
+            10=>format!("AUDIO SETTINGS\n\n● Auto               Backend chooses stream quality\n○ Data Saver         Unavailable\n○ Standard           Unavailable\n○ High Quality       Unavailable\n○ Lossless           Unavailable\n○ Hi-Res Lossless    Unavailable\n\nBackend: {}\n{}\n\nSource codec        Unknown\nSource sample rate  Unknown\nSource bit depth    Unknown\nSource channels     Unknown\nBuffer status       Unknown\n\nQuality is shown only when a native backend reports reliable source fields.\nPipeWire output format does not establish source quality.",self.status.as_ref().map_or("No playback process",|s|s.backend.as_str()),self.status.as_ref().map_or("Source quality unknown".into(),|s|s.playback.quality_label())),
+            11=>format!("SETTINGS\n\nTheme: {}\nResources: {:?}\n\n:theme dark | light | catppuccin_mocha | catppuccin_latte\n:theme gruvbox | nord | monochrome | tokyo_night | custom\n:profile minimal | balanced | enhanced\n\n~/.config/rustune/config.toml\nKeybindings, custom colors, notifications, mouse\nand daemon behavior can be configured there.\n\n:login  :logout  :sleep MINUTES  :clear  :history\nDaemon mode keeps playback running when the TUI closes.",self.config.theme,self.status.as_ref().map_or(self.config.performance,|s|s.profile)),
             _=>{let mut s="HELP · DEFAULT BINDINGS\n\n".to_owned();for (action,key) in keys::DEFAULTS {s.push_str(&format!("{key:<12}{action}   "));if s.lines().last().is_some_and(|l|l.len()>65){s.push('\n');}}s.push_str("\n\nTab → j/k → Enter: choose a screen. 1–9 direct navigation.\nSearch: F2 changes resource type. PgDn loads the next page.\nQueue: Delete removes; J/K reorder; :clear clears.\nCommands: :login :logout :profile MODE :theme NAME\n:sleep MINUTES :recent :history :queue :audio :help\nCtrl-C always exits. ~/.config/rustune/config.toml customizes bindings.");s}
         };
         f.render_widget(
@@ -1107,7 +1112,7 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
             tokio::select! {
                 _=resize.recv()=>{},
                 Some(result)=lyric_results.recv()=>{if Some(&result.request)==last_lyrics.as_ref(){app.accept_lyrics(result);}},
-                Some(result)=auth_results.recv()=>match result{Some(saved)=>{app.token_stored=saved;app.note=if saved{auth::SAVED_MESSAGE.into()}else{"Local token removed; browser/account authorization unchanged.".into()};},None=>app.note="Could not update the private token file; check config-directory permissions.".into()},
+                Some(result)=auth_results.recv()=>match result{Some(saved)=>{app.token_stored=saved;app.note=if saved{auth::SAVED_MESSAGE.into()}else{"Local token removed; Apple account authorization unchanged.".into()};},None=>app.note="Could not update the private token file; check config-directory permissions.".into()},
                 Some(cover)=covers.recv()=>{if Some(&cover.request)==last_artwork.as_ref(){app.accept_artwork(cover);}}
                 event=events.next()=>{
                     let Some(event)=event else{break;};let event=event?;let mut request=None;
@@ -1164,6 +1169,63 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
 #[cfg(test)]
 mod login_tests {
     use super::*;
+    #[test]
+    fn token_input_shows_dots_and_supports_editing_without_showing_the_secret() {
+        let mut app = App::new(Config::default());
+        let key = |c| crossterm::event::KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+        app.key(key('L')).unwrap();
+        for c in "secret".chars() {
+            app.key(key(c)).unwrap();
+        }
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        let mut rendered = |app: &App| {
+            t.draw(|f| app.render(f)).unwrap();
+            t.backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>()
+        };
+        let text = rendered(&app);
+        assert!(text.contains("••••••") && text.contains("6 characters"));
+        assert!(!text.contains("secret"));
+        app.key(crossterm::event::KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        ))
+        .unwrap();
+        assert!(rendered(&app).contains("5 characters"));
+        app.key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+        ))
+        .unwrap();
+        let cleared = rendered(&app);
+        assert!(cleared.contains("No token entered") && !cleared.contains("••"));
+    }
+    #[test]
+    fn screens_do_not_offer_removed_browser_setup() {
+        let mut app = App::new(Config::default());
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(142, 39)).unwrap();
+        for screen in 0..SCREENS.len() {
+            app.screen = screen;
+            t.draw(|f| app.render(f)).unwrap();
+            let text = t
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>();
+            for removed in ["Firefox", "Chromium", ":connect-browser", "add-on"] {
+                assert!(
+                    !text.contains(removed),
+                    "screen {screen} advertises {removed}"
+                );
+            }
+        }
+    }
     #[test]
     fn external_queue_reorder_requests_one_refresh_without_a_status_feedback_loop() {
         let mut app = App::new(Config::default());

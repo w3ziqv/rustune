@@ -1,5 +1,4 @@
 use crate::{
-    backend::{MusicService, PlaybackBackend, musickit::MusicKit},
     cache::Cache,
     config::{Config, Paths, PerformanceMode, private_write},
     ipc::{Request, read_frame, write_frame},
@@ -95,15 +94,14 @@ pub async fn send(tx: &Sender, request: Request) -> Result<Value> {
 }
 
 struct Engine {
-    backend: MusicKit,
+    config: Config,
+    paths: Paths,
     queue: Queue,
     playback: Playback,
     cache: Cache<String, Page>,
     history: Vec<String>,
     started: Instant,
     message: String,
-    sleep: Option<Instant>,
-    volume_before_mute: f64,
     shutdown: bool,
     dismissed: Option<String>,
 }
@@ -111,7 +109,7 @@ impl Engine {
     fn new(config: Config, paths: Paths) -> Result<Self> {
         let p = paths.data.join("state.json");
         let mut saved = SavedState::default();
-        let mut message = "Ready. L saves a local token • :connect-browser authorizes the optional browser backend".to_owned();
+        let mut message = "Ready. L enters a Music User Token; token storage is local and account acceptance is unverified.".to_owned();
         if config.restore_queue && p.exists() {
             match (||->Result<SavedState>{
                 ensure!(fs::metadata(&p)?.len()<=16*1024*1024,"saved state exceeds limit");
@@ -132,15 +130,14 @@ impl Engine {
             ..Playback::default()
         };
         Ok(Self {
-            backend: MusicKit::new(config, paths),
+            config,
+            paths,
             queue: saved.queue,
             playback,
             cache: Cache::new(cap),
             history: saved.history,
             started: Instant::now(),
             message,
-            sleep: None,
-            volume_before_mute: 0.7,
             shutdown: false,
             dismissed: saved.dismissed,
         })
@@ -153,23 +150,21 @@ impl Engine {
             current: self.queue.current,
             repeat: self.queue.repeat,
             shuffle: self.queue.shuffle,
-            profile: self.backend.config.performance,
+            profile: self.config.performance,
             pid: std::process::id(),
-            browser_pid: self.backend.pid(),
-            backend: self.backend.name().into(),
-            playback_available: self.backend.config.backend != crate::config::BackendKind::Disabled,
-            browser_shared: self.backend.config.backend == crate::config::BackendKind::Firefox,
+            browser_pid: None,
+            backend: "Native playback unavailable".into(),
+            playback_available: false,
+            browser_shared: false,
             uptime_secs: self.started.elapsed().as_secs(),
             cache_entries: self.cache.entries.len(),
             message: self.message.clone(),
-            sleep_remaining: self
-                .sleep
-                .map(|t| t.saturating_duration_since(Instant::now()).as_secs()),
+            sleep_remaining: None,
         }
     }
     fn save(&self) -> Result<()> {
         private_write(
-            &self.backend.paths.data.join("state.json"),
+            &self.paths.data.join("state.json"),
             &serde_json::to_vec(&SavedState {
                 queue: self.queue.clone(),
                 history: self.history.clone(),
@@ -177,220 +172,30 @@ impl Engine {
             })?,
         )
     }
-    async fn play_index(&mut self, i: usize) -> Result<()> {
-        let t = self
-            .queue
-            .tracks
-            .get(i)
-            .context("queue index out of range")?;
-        self.backend
-            .execute("play_track", json!({"id":t.id}))
-            .await?;
-        self.queue.current = Some(i);
-        self.dismissed = None;
-        self.playback = self.backend.snapshot().await?;
-        self.save()?;
-        Ok(())
-    }
-    async fn refresh(&mut self) -> Result<()> {
-        if self.sleep.is_some_and(|t| t <= Instant::now()) {
-            self.sleep = None;
-            if self.backend.pid().is_some() {
-                self.backend.execute("pause", Value::Null).await?;
-            }
-            self.message = "Sleep timer finished".into();
-        }
-        if self.backend.pid().is_none() {
-            return Ok(());
-        }
-        let previous = self.playback.clone();
-        match self.backend.snapshot().await {
-            Ok(s) => self.playback = s,
-            Err(_) => {
-                self.backend.close().await;
-                self.playback.playing = false;
-                self.message =
-                    "Browser disconnected. Use Play to reconnect; :connect-browser if authorization expired."
-                        .into();
-                return Ok(());
-            }
-        }
-        if previous.authorized != self.playback.authorized {
-            self.cache = Cache::new(self.backend.config.performance.limits().cache_entries);
-        }
-        if self.backend.login_mode && self.playback.authorized {
-            self.backend.finish_login().await?;
-            self.message = "Apple Music authorized. Ready for playback.".into();
-        }
-        if self.playback.preview {
-            self.message =
-                "Preview rejected: full-song subscription/DRM playback is unavailable.".into();
-        }
-        // Use the official playback state, not a guessed elapsed-time threshold.
-        if previous.playing
-            && !self.playback.playing
-            && self.playback.ended
-            && !self.playback.preview
-            && let Some(i) = self.queue.candidate(false)
-        {
-            self.play_index(i).await?;
-        }
-        if self.backend.config.notifications
-            && previous.track.as_ref().map(|t| &t.id) != self.playback.track.as_ref().map(|t| &t.id)
-            && let Some(t) = &self.playback.track
-        {
-            let _ = tokio::process::Command::new("notify-send")
-                .args(["--app-name=Rustune", "--", &t.title, &t.artist])
-                .kill_on_drop(true)
-                .status()
-                .await;
-        }
-        Ok(())
-    }
     async fn handle(&mut self, request: Request) -> Result<Value> {
-        if self.backend.config.backend == crate::config::BackendKind::Disabled
-            && matches!(
-                request,
-                Request::Play
-                    | Request::Pause
-                    | Request::Toggle
-                    | Request::Next
-                    | Request::Previous
-                    | Request::Seek(_)
-                    | Request::Volume(_)
-                    | Request::Mute
-                    | Request::Login
-                    | Request::Logout
-                    | Request::Browse { .. }
-                    | Request::PlayIndex(_)
-                    | Request::Enqueue { play: true, .. }
-                    | Request::Sleep(1..)
-            )
-        {
-            anyhow::bail!(crate::backend::musickit::NATIVE_UNAVAILABLE);
-        }
-        if self.backend.config.backend == crate::config::BackendKind::Firefox
-            && self.backend.pid().is_none()
-            && matches!(
-                request,
-                Request::Play
-                    | Request::Pause
-                    | Request::Toggle
-                    | Request::Next
-                    | Request::Previous
-                    | Request::Seek(_)
-                    | Request::Volume(_)
-                    | Request::Mute
-                    | Request::Login
-                    | Request::Browse { .. }
-            )
-        {
-            self.backend
-                .start(matches!(request, Request::Login))
-                .await?;
-            self.playback = self.backend.snapshot().await?;
-            self.cache = Cache::new(self.backend.config.performance.limits().cache_entries);
-            if let Some(track) = self.playback.track.as_ref()
-                && self.queue.tracks.is_empty()
-                && (self.dismissed.as_ref() != Some(&track.id) || self.playback.playing)
-            {
-                validate_track(track)?;
-                self.queue.push(track.clone())?;
-                self.queue.current = Some(0);
-                self.dismissed = None;
-                self.save()?;
-            }
-        }
         let mut save = false;
         match request {
             Request::Subscribe => anyhow::bail!("subscription requires a dedicated connection"),
             Request::Status => return Ok(serde_json::to_value(self.status())?),
             Request::QueuePage { offset } => {
                 return Ok(
-                    json!({"items":self.queue.tracks.iter().skip(offset).take(self.backend.config.performance.limits().page_size).collect::<Vec<_>>(),"offset":offset,"total":self.queue.tracks.len()}),
+                    json!({"items":self.queue.tracks.iter().skip(offset).take(self.config.performance.limits().page_size).collect::<Vec<_>>(),"offset":offset,"total":self.queue.tracks.len()}),
                 );
             }
             Request::History => return Ok(json!(self.history)),
-            Request::Login => {
-                self.cache = Cache::new(self.backend.config.performance.limits().cache_entries);
-                self.backend.start(true).await?;
-                self.message =
-                    if self.backend.config.backend == crate::config::BackendKind::Firefox {
-                        "Connected to your existing Firefox Apple Music session."
-                    } else {
-                        "Complete Apple ID and 2FA in Chromium; :status shows authorization."
-                    }
-                    .into();
-            }
-            Request::Logout => {
-                self.cache = Cache::new(self.backend.config.performance.limits().cache_entries);
-                self.backend.execute("logout", Value::Null).await?;
-                self.backend.close().await;
-                self.playback = Playback::default();
-                self.message = "Signed out of MusicKit. Use :connect-browser to authorize the optional backend again.".into();
-            }
-            Request::Play | Request::Toggle if !self.playback.playing => {
-                if self.backend.pid().is_none()
-                    || !self.queue.can_resume(self.playback.track.as_ref())
-                {
-                    let i = self.queue.current.unwrap_or(0);
-                    self.play_index(i).await?;
-                } else {
-                    self.backend.execute("play", Value::Null).await?;
-                }
-            }
-            Request::Pause | Request::Toggle => {
-                if self.backend.pid().is_some() {
-                    self.backend.execute("pause", Value::Null).await?;
-                }
-            }
-            Request::Play => {}
-            Request::Next => {
-                if let Some(i) = self.queue.candidate(true) {
-                    self.play_index(i).await?;
-                } else if self.backend.pid().is_some() {
-                    self.backend.execute("pause", Value::Null).await?;
-                }
-            }
-            Request::Previous => {
-                let i = self.queue.current.unwrap_or(0).saturating_sub(1);
-                self.play_index(i).await?;
-            }
-            Request::Seek(seconds) => {
-                ensure!(
-                    seconds.is_finite() && seconds >= 0.0 && seconds <= self.playback.duration,
-                    "seek must be within the current track"
-                );
-                self.backend
-                    .execute("seek", json!({"seconds":seconds}))
-                    .await?;
-            }
-            Request::Volume(volume) => {
-                ensure!(
-                    volume.is_finite() && (0.0..=1.0).contains(&volume),
-                    "volume must be 0..1"
-                );
-                self.backend.config.volume = volume;
-                if self.backend.pid().is_some() {
-                    self.backend
-                        .execute("volume", json!({"volume":volume}))
-                        .await?;
-                }
-                self.playback.volume = volume;
-                self.backend.config.save(&self.backend.paths)?;
-            }
-            Request::Mute => {
-                let v = if self.backend.config.volume > 0.0 {
-                    self.volume_before_mute = self.backend.config.volume;
-                    0.0
-                } else {
-                    self.volume_before_mute
-                };
-                self.backend.config.volume = v;
-                self.playback.volume = v;
-                if self.backend.pid().is_some() {
-                    self.backend.execute("volume", json!({"volume":v})).await?;
-                }
+            Request::Play
+            | Request::Pause
+            | Request::Toggle
+            | Request::Next
+            | Request::Previous
+            | Request::Seek(_)
+            | Request::Volume(_)
+            | Request::Mute
+            | Request::Browse { .. }
+            | Request::PlayIndex(_)
+            | Request::Enqueue { play: true, .. }
+            | Request::Sleep(1..) => {
+                anyhow::bail!(crate::backend::NATIVE_UNAVAILABLE);
             }
             Request::Shuffle => {
                 self.queue.shuffle = !self.queue.shuffle;
@@ -404,70 +209,34 @@ impl Engine {
                 };
                 save = true;
             }
-            Request::Sleep(seconds) => {
-                ensure!(seconds <= 86400, "sleep timer maximum is 24 hours");
-                self.sleep = if seconds == 0 {
-                    None
-                } else {
-                    Some(Instant::now() + Duration::from_secs(seconds))
-                };
-            }
-            Request::Browse { kind, term, next } => {
-                ensure!(kind.len() <= 256, "browse kind too long");
-                let key = format!("{kind}\0{term}\0{}", next.as_deref().unwrap_or(""));
-                if let Some(page) = self.cache.get(&key) {
-                    return Ok(serde_json::to_value(page)?);
-                }
-                let page = self
-                    .backend
-                    .browse(
-                        &kind,
-                        &term,
-                        next.as_deref(),
-                        self.backend.config.performance.limits().page_size,
-                    )
-                    .await?;
-                if kind.starts_with("search") && !term.is_empty() {
-                    self.history.retain(|s| s != &term);
-                    self.history.insert(0, term);
-                    self.history.truncate(50);
-                    self.save()?;
-                }
-                let result = serde_json::to_value(&page)?;
-                self.cache.insert(key, page);
-                return Ok(result);
-            }
-            Request::Enqueue { track, next, play } => {
+            Request::Sleep(0) => self.message = "Sleep timer cancelled".into(),
+            Request::Enqueue {
+                track,
+                next,
+                play: false,
+            } => {
                 validate_track(&track)?;
                 ensure!(
                     track.kind == "songs" || track.kind == "library-songs",
                     "open this album/artist/playlist first"
                 );
                 ensure!(
-                    self.queue.tracks.len() < self.backend.config.max_queue,
+                    self.queue.tracks.len() < self.config.max_queue,
                     "queue limit reached"
                 );
-                let mut i = self.queue.tracks.len();
+                let i = self.queue.tracks.len();
                 self.queue.push(track)?;
                 if next {
                     let target = self.queue.current.map_or(0, |i| i + 1);
                     self.queue.move_item(i, target);
-                    i = target;
                 }
                 self.save()?;
-                if play {
-                    self.play_index(i).await?;
-                }
                 save = true;
             }
-            Request::PlayIndex(i) => self.play_index(i).await?,
             Request::Remove(i) => {
                 ensure!(i < self.queue.tracks.len(), "queue index out of range");
                 if self.queue.current == Some(i) {
                     self.dismissed = self.playback.track.as_ref().map(|t| t.id.clone());
-                }
-                if self.queue.current == Some(i) && self.backend.pid().is_some() {
-                    self.backend.execute("pause", Value::Null).await?;
                 }
                 self.queue.remove(i);
                 save = true;
@@ -478,32 +247,25 @@ impl Engine {
             }
             Request::Clear => {
                 self.dismissed = self.playback.track.as_ref().map(|t| t.id.clone());
-                if self.backend.pid().is_some() {
-                    self.backend.execute("pause", Value::Null).await?;
-                }
                 self.queue.clear();
                 save = true;
             }
             Request::Theme(theme) => {
-                let mut c = self.backend.config.clone();
+                let mut c = self.config.clone();
                 c.theme = theme;
                 Config::parse(&toml::to_string(&c)?)?;
-                self.backend.config = c;
-                self.backend.config.save(&self.backend.paths)?;
+                self.config = c;
+                self.config.save(&self.paths)?;
             }
             Request::Profile(profile) => {
-                self.backend.config.performance = profile;
+                self.config.performance = profile;
                 self.cache = Cache::new(profile.limits().cache_entries);
-                self.backend.config.save(&self.backend.paths)?;
+                self.config.save(&self.paths)?;
             }
             Request::Stop => self.shutdown = true,
         }
         if save {
             self.save()?;
-        }
-        // Browser snapshots are refreshed by the service, never inferred from commands.
-        if self.backend.pid().is_some() && !self.backend.login_mode {
-            self.refresh().await?;
         }
         Ok(serde_json::to_value(self.status())?)
     }
@@ -603,12 +365,9 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
         })
         .await;
     });
-    // The static origin is cheap and carries no credentials. Chromium remains lazy.
 
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     loop {
-        let active = engine.backend.pid().is_some() || engine.sleep.is_some();
-        let delay = Duration::from_millis(engine.backend.config.performance.limits().refresh_ms);
         tokio::select! {
             Some(e)=rx.recv()=>{
                 let r=engine.handle(e.request).await;
@@ -617,15 +376,10 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                 state_tx.send_replace(engine.status());
                 if engine.shutdown{break;}
             }
-            _=tokio::time::sleep(delay),if active=>{
-                if let Err(e)=engine.refresh().await{engine.message=e.to_string();}
-                state_tx.send_replace(engine.status());
-            }
             _=tokio::signal::ctrl_c()=>break,
             _=term.recv()=>break,
         }
     }
-    engine.backend.close().await;
     drop(state_tx);
     let _ = quit_accept.send(());
     let _ = accept.await;
@@ -648,10 +402,7 @@ mod tests {
             runtime: d.path().join("run"),
         };
         paths.init().unwrap();
-        let config = Config {
-            backend: crate::config::BackendKind::MusicKit,
-            ..Config::default()
-        };
+        let config = Config::default();
         let mut e = Engine::new(config, paths).unwrap();
         for id in ["a", "b", "c"] {
             e.queue
@@ -674,7 +425,6 @@ mod tests {
     #[tokio::test]
     async fn disabled_playback_commands_explain_missing_engine_without_mutating_queue() {
         let (_dir, mut e) = engine();
-        e.backend.config.backend = crate::config::BackendKind::Disabled;
         for request in [
             Request::Play,
             Request::Pause,
@@ -687,61 +437,5 @@ mod tests {
             assert!(error.contains("Native Linux playback"), "{error}");
             assert_eq!(e.queue.current, Some(0));
         }
-    }
-    #[tokio::test]
-    async fn stopped_browser_logout_cannot_report_a_false_success() {
-        let (_dir, mut e) = engine();
-        assert!(
-            e.handle(Request::Logout).await.is_err(),
-            "no token/browser means authorization was not revoked"
-        );
-    }
-    #[tokio::test]
-    async fn logout_invalidates_private_cached_pages_even_on_failure() {
-        let (_dir, mut e) = engine();
-        e.cache.insert(
-            "library\0\0".into(),
-            Page {
-                items: vec![Track {
-                    id: "private".into(),
-                    ..Track::default()
-                }],
-                next: None,
-            },
-        );
-        let _ = e.handle(Request::Logout).await;
-        assert!(e.cache.entries.is_empty());
-    }
-}
-
-#[cfg(test)]
-mod shared_browser_tests {
-    use super::*;
-    #[tokio::test]
-    async fn first_pause_connects_to_the_existing_firefox_session() {
-        let d = tempfile::tempdir().unwrap();
-        let paths = Paths {
-            config: d.path().join("config"),
-            data: d.path().join("data"),
-            cache: d.path().join("cache"),
-            runtime: d.path().join("run"),
-        };
-        paths.init().unwrap();
-        let listener = tokio::net::UnixListener::bind(paths.runtime.join("firefox.sock")).unwrap();
-        let mut engine = Engine::new(
-            Config {
-                backend: crate::config::BackendKind::Firefox,
-                ..Config::default()
-            },
-            paths,
-        )
-        .unwrap();
-        let client = tokio::spawn(async move { engine.handle(Request::Pause).await });
-        let connected = tokio::time::timeout(Duration::from_millis(500), listener.accept()).await;
-        client.abort();
-        assert!(
-            connected.is_ok(),
-            "Pause must connect to an existing Firefox session rather than silently succeeding"
-        );
     }
 }

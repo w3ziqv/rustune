@@ -23,11 +23,5 @@ jobs:
         if: matrix.toolchain == 'stable'
       - run: cargo clippy --locked --all-targets -- -D warnings
         if: matrix.toolchain == 'stable'
-      - run: node tests/extension.mjs
-      - run: node tests/musickit.mjs
-      - name: Check generated Firefox adapter
-        run: |
-          python3 scripts/package-firefox.py
-          git diff --exit-code -- extensions/firefox/adapter.js
       - run: cargo test --locked
       - run: cargo build --locked --release

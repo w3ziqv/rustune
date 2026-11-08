@@ -7,7 +7,6 @@ arch=('x86_64')
 url='https://github.com/w3ziqv/rustune'
 license=('MIT')
 depends=('gcc-libs' 'glibc' 'dbus')
-optdepends=('firefox: optional legacy MusicKit controller')
 makedepends=('cargo' 'git')
 source=('rustune::git+https://github.com/w3ziqv/rustune.git#branch=main')
 sha256sums=('SKIP')

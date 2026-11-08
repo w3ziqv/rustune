@@ -18,15 +18,14 @@ playback SDKs; no native Linux playback SDK is documented there. Widevine's
 [device integration process](https://www.widevine.com/solutions/widevine-drm)
 requires agreements and SDK/integration work. No compatible licensed native
 playback integration has been established for Rustune. Native full-song playback
-is therefore **not implemented or verified**. The default backend is disabled;
-it reports this limitation and does not silently start a browser. Existing browser
-controllers remain explicit legacy choices. A manually supplied Music User Token
+is therefore **not implemented or verified**. The native engine is unavailable and reports that limitation. Browser controllers,
+extensions and their setup/login paths have now been removed. A manually supplied Music User Token
 is kept outside the repository and is not treated as a developer JWT or used to
 pretend that native playback works.
 
-The public MusicKit `bitrate` getter is an adaptive/configured 64/256 kb/s target,
-not evidence of the current stream encoding. Rustune labels it as a target and
-preserves unknown source fields.
+In the earlier browser research, the public MusicKit `bitrate` getter is an adaptive/configured 64/256 kb/s target,
+not evidence of the current stream encoding. That getter never established a measured source format. Current native source
+fields remain unknown.
 
 Apple provides catalog and personal-library APIs, but their JSON responses are
 not a native Linux full-song audio API. MusicKit JS is the supported web playback

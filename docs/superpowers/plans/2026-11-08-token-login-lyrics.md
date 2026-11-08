@@ -1,3 +1,5 @@
+> Historical plan. Browser functionality has been removed; the native-only token-feedback plan supersedes this document.
+
 # Token login, lyrics and player layout implementation plan
 
 > **For agentic workers:** Use executing-plans inline, TDD per task, one independent whole-branch review before publication.
