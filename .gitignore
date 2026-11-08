@@ -4,5 +4,9 @@
 *.pem
 *.p8
 *developer-token*
+*music-user-token*
+*.wvd
 *.log
 /dist/
+__pycache__/
+*.pyc

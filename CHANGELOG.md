@@ -1,0 +1,16 @@
+# Changelog
+
+## Unreleased — experimental source
+
+- Linux Ratatui terminal client and private Unix-socket service.
+- Persistent queue, bounded pagination/cache, MPRIS and sleep timer.
+- Latest stable Rust 1.99.1, zbus 6, TOML 1.2 and current compatible dependencies.
+- Pure black background and white text/borders; optional Tokyo Night and other themes.
+- Bounded lazy album covers and explicit terminal image protocols.
+- MusicKit bitrate targets distinguished from unknown source quality.
+- Native playback is unavailable; default backend disabled with no browser fallback.
+- Explicit legacy Firefox/MusicKit and Chromium controllers retained.
+
+Earlier interactive verification completed a subscribed song using Firefox,
+not native playback. Updated-source checks are recorded in docs/validation.md.
+No release tag is created for the requested native player.

@@ -1,0 +1,26 @@
+# Development starting point only; not submitted to AUR.
+pkgname=rustune-git
+pkgver=0.1.0.r0
+pkgrel=1
+pkgdesc='Experimental Apple Music TUI controller for Linux'
+arch=('x86_64')
+url='https://github.com/w3ziqv/rustune'
+license=('MIT')
+depends=('gcc-libs' 'glibc' 'dbus')
+optdepends=('firefox: optional legacy MusicKit controller')
+makedepends=('cargo' 'git')
+source=('rustune::git+https://github.com/w3ziqv/rustune.git#branch=main')
+sha256sums=('SKIP')
+build() {
+  cd "$srcdir/rustune"
+  cargo build --frozen --release
+}
+check() {
+  cd "$srcdir/rustune"
+  cargo test --frozen
+}
+package() {
+  cd "$srcdir/rustune"
+  install -Dm755 target/release/rustune "$pkgdir/usr/bin/rustune"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
