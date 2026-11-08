@@ -52,7 +52,7 @@ Files: src/ui/player.rs, src/ui.rs, src/artwork.rs, src/keys.rs, tests/ui.rs, do
 - [x] Make Now Playing the primary view; large square artwork left, metadata and centered scrolling lyrics right, progress and clickable bordered controls below.
 - [x] Make artwork encoding size-aware and bounded; lazily fetch lyrics when visible, reject stale results, support refresh and disabling lyrics.
 - [x] Run real PTY smoke without audio controls, network lyrics/artwork smoke, fmt/Clippy/full tests/release build and independent review.
-- [ ] Update docs, install binary atomically, audit secrets and publish source under existing authorization; no native-player release tag.
+- [x] Update docs, install binary atomically, audit secrets and publish source under existing authorization; no native-player release tag.
 
 ## Decisions and evidence
 
@@ -73,3 +73,6 @@ Files: src/ui/player.rs, src/ui.rs, src/artwork.rs, src/keys.rs, tests/ui.rs, do
 - Final: fixed login hints and overlong lyric accessibility; wrapped-row/end-of-line test RED→GREEN. No remaining deferred review findings.
 - Final: visual inspection found a small image not filling the large artwork allocation; encoded cell-size regression RED→GREEN, actual buffer inspected again.
 - Final validation: fmt, Clippy -D warnings, 53 tests, release build, cargo audit, isolated real PTY and separate real LRCLIB/artwork smoke passed. Native playback remains unimplemented.
+
+- Selected queue lyrics preview: RED→GREEN regression, no backend or playback command required. This makes free lyrics independently usable while native audio remains unavailable. Full suite now 54 tests.
+- Source update 9975171 published to main and GitHub CI passed for stable/1.99.1. Updated binary installed atomically; the user session was not restarted.

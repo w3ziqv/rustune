@@ -130,12 +130,7 @@ pub(super) fn render(app: &App, f: &mut Frame, p: Palette) {
         if let Some(image) = result.and_then(|r| r.image.as_ref()) {
             f.render_widget(ratatui_image::Image::new(image), cover);
         } else {
-            let text = if app
-                .status
-                .as_ref()
-                .and_then(|s| s.playback.track.as_ref())
-                .is_none()
-            {
+            let text = if app.displayed_track().is_none() {
                 "\nRUSTUNE\n\nNothing playing\n\nL  Login\n/  Search"
             } else if key.is_none() {
                 "\nNo artwork reported"
@@ -152,7 +147,7 @@ pub(super) fn render(app: &App, f: &mut Frame, p: Palette) {
             );
         }
     }
-    let track = app.status.as_ref().and_then(|s| s.playback.track.as_ref());
+    let track = app.displayed_track();
     let [names, album] =
         Layout::horizontal([Constraint::Percentage(60), Constraint::Fill(1)]).areas(a.metadata);
     let (title, artist, album_name) = track.map_or(("Nothing playing", "—", "—"), |t| {
@@ -178,21 +173,26 @@ pub(super) fn render(app: &App, f: &mut Frame, p: Palette) {
     );
     if a.metadata.height >= 6 {
         f.render_widget(
-            Paragraph::new(
+            Paragraph::new(if app.lyrics_preview() {
+                "LYRICS PREVIEW · playback unchanged".into()
+            } else {
                 app.status
                     .as_ref()
                     .map_or("Source quality unknown".into(), |s| {
                         s.playback.quality_label()
-                    }),
-            ),
+                    })
+            }),
             Rect::new(a.metadata.x, a.metadata.y + 5, a.metadata.width, 1),
         );
     }
     render_lyrics(app, f, a.lyrics, p);
-    let (position, duration) = app
-        .status
-        .as_ref()
-        .map_or((0.0, 0.0), |s| (s.playback.position, s.playback.duration));
+    let (position, duration) = if app.lyrics_preview() {
+        (0.0, track.map_or(0.0, |t| t.duration_ms as f64 / 1000.0))
+    } else {
+        app.status
+            .as_ref()
+            .map_or((0.0, 0.0), |s| (s.playback.position, s.playback.duration))
+    };
     let ratio = if duration > 0.0 {
         (position / duration).clamp(0.0, 1.0)
     } else {
@@ -298,7 +298,7 @@ pub(super) fn render_lyrics(app: &App, f: &mut Frame, area: Rect, p: Palette) {
     let Some(LyricsState::Found(lyrics)) = result.map(|r| &r.state) else {
         return;
     };
-    let position = app.status.as_ref().map_or(0.0, |s| s.playback.position);
+    let position = app.displayed_position();
     let active = lyrics.active_line(position);
     let wrapped = lyric_rows(lyrics, area.width);
     let active_row = active

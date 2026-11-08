@@ -11,7 +11,7 @@ Local validation on Arch Linux x86_64, stable Rust 1.99.1:
 
 - `cargo fmt --all -- --check`: passed.
 - `cargo clippy --all-targets -- -D warnings`: passed.
-- `cargo test`: 53 tests passed; six opt-in browser/network/visual tests are
+- `cargo test`: 54 tests passed; six opt-in browser/network/visual tests are
   excluded from the normal suite.
 - `cargo build --release`: passed; `cargo build --profile compact`: passed.
 - `cargo audit`: no reported vulnerabilities or advisory warnings in this lockfile.
@@ -80,3 +80,9 @@ player/controller/catalog availability. They do not establish a subscribed
 Chromium playback path. No long-duration listening/memory-growth guarantee,
 lossless path, native DRM integration, live logout, cross-platform or permanent
 Mozilla add-on signing validation is claimed.
+
+A further regression verifies that a selected saved queue song opens the Lyrics
+view without a backend or any playback command. Preview metadata/artwork is
+separate from actual playback status; another song's clock is never used to sync
+it. The GitHub CI matrix for the main token/lyrics/layout update passed on stable
+and pinned 1.99.1.

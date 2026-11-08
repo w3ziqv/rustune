@@ -45,3 +45,11 @@ only line counts/sync status; it does not print the lyrics:
 cargo test --test lyrics -- --ignored --nocapture
 cargo test export_player_layout_for_visual_review -- --ignored
 ```
+
+
+To read lyrics without starting playback, open Queue (8), highlight a saved
+song and press l. The Lyrics view uses that song's real stored metadata and
+artwork, displays a preview label and does not send a playback command. Its clock
+stays at zero when it is not the currently playing song. Transport controls
+continue to affect the current playback session. This is independent of token
+acceptance and does not claim a native audio engine.

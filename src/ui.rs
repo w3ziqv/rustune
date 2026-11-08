@@ -122,6 +122,7 @@ pub struct App {
     lyrics_generation: u64,
     lyrics_scroll: Option<usize>,
     viewport: Size,
+    inspected_track: Option<Track>,
 }
 impl App {
     pub fn new(config: Config) -> Self {
@@ -150,6 +151,7 @@ impl App {
             lyrics_generation: 0,
             lyrics_scroll: None,
             viewport: Size::new(100, 30),
+            inspected_track: None,
         }
     }
     pub fn artwork_request(&self, size: Size) -> Option<CoverRequest> {
@@ -167,15 +169,7 @@ impl App {
         } else {
             return None;
         };
-        let url = self
-            .status
-            .as_ref()?
-            .playback
-            .track
-            .as_ref()?
-            .artwork
-            .as_ref()?
-            .clone();
+        let url = self.displayed_track()?.artwork.as_ref()?.clone();
         let background = match palette(&self.config).bg {
             Color::Rgb(r, g, b) => [r, g, b],
             _ => [0, 0, 0],
@@ -195,16 +189,43 @@ impl App {
         if !self.config.lyrics || !matches!(self.screen, 1 | 8) {
             return None;
         }
-        let status = self.status.as_ref()?;
-        let mut query = LyricsQuery::from_track(status.playback.track.as_ref()?)?;
+        let mut query = LyricsQuery::from_track(self.displayed_track()?)?;
         query.generation = self.lyrics_generation;
         Some(LyricsRequest {
             query,
-            profile: status.profile,
+            profile: self
+                .status
+                .as_ref()
+                .map_or(self.config.performance, |s| s.profile),
         })
     }
     pub fn accept_lyrics(&mut self, result: LyricsResult) {
         self.lyrics_result = Some(result);
+    }
+    fn displayed_track(&self) -> Option<&Track> {
+        if self.screen == 8 {
+            self.inspected_track
+                .as_ref()
+                .or_else(|| self.status.as_ref()?.playback.track.as_ref())
+        } else {
+            self.status.as_ref()?.playback.track.as_ref()
+        }
+    }
+    fn lyrics_preview(&self) -> bool {
+        self.screen == 8
+            && self.inspected_track.as_ref().is_some_and(|t| {
+                self.status
+                    .as_ref()
+                    .and_then(|s| s.playback.track.as_ref())
+                    .is_none_or(|current| current.id != t.id)
+            })
+    }
+    fn displayed_position(&self) -> f64 {
+        if self.lyrics_preview() {
+            0.0
+        } else {
+            self.status.as_ref().map_or(0.0, |s| s.playback.position)
+        }
     }
     fn render_cover(&self, f: &mut Frame, area: Rect, p: Palette) {
         let area = Rect::new(area.x, area.y, 26, 14);
@@ -248,6 +269,9 @@ impl App {
         }
     }
     fn go(&mut self, screen: usize) -> Option<Request> {
+        if screen != 8 {
+            self.inspected_track = None;
+        }
         self.screen = screen;
         self.nav = screen;
         self.selected = 0;
@@ -423,7 +447,7 @@ impl App {
                 let rows = player::lyric_rows(lyrics, area.width);
                 let current = self.lyrics_scroll.unwrap_or_else(|| {
                     lyrics
-                        .active_line(self.status.as_ref().map_or(0.0, |s| s.playback.position))
+                        .active_line(self.displayed_position())
                         .and_then(|index| rows.iter().position(|(line, _)| *line == index))
                         .unwrap_or(0)
                 });
@@ -579,7 +603,15 @@ impl App {
                 self.go(9);
             }
             Some("lyrics") => {
+                self.inspected_track = if matches!(self.screen, 2..=7) {
+                    self.items.get(self.selected).cloned()
+                } else {
+                    None
+                };
                 self.go(8);
+                if self.lyrics_preview() {
+                    self.note = "Lyrics preview for the selected song; playback unchanged.".into();
+                }
             }
             Some("visualizer") => self.note =
                 "Visualizer unavailable: protected audio samples are not exposed by this backend."
@@ -1104,6 +1136,22 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
 #[cfg(test)]
 mod login_tests {
     use super::*;
+    #[test]
+    fn selected_queue_song_can_open_lyrics_without_a_playback_backend() {
+        let mut app = App::new(Config::default());
+        app.screen = 7;
+        app.accept(&Request::QueuePage{offset:0},serde_json::json!({"items":[{"id":"saved-song","title":"Our saved song","artist":"Our artist","duration_ms":100000}]})).unwrap();
+        let result = app
+            .key(crossterm::event::KeyEvent::new(
+                KeyCode::Char('l'),
+                KeyModifiers::NONE,
+            ))
+            .unwrap();
+        assert!(result.1.is_none());
+        assert_eq!(app.screen, 8);
+        assert_eq!(app.lyrics_request().unwrap().query.title, "Our saved song");
+        assert!(app.status.is_none());
+    }
     #[test]
     fn long_lyric_lines_can_be_scrolled_to_their_end() {
         let mut app = App::new(Config::default());

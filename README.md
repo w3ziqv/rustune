@@ -190,7 +190,9 @@ and a real visualizer are not implemented. Their screens explain why.
 Free LRCLIB lyrics work without an API key. Requests send the track title, artist,
 album and duration to LRCLIB, never Apple credentials. Synced LRC follows reported
 playback position; plain-text and instrumental records have distinct states.
-Lyrics wrap, scroll and use a bounded cache. `lyrics = false` disables lookup.
+Lyrics wrap, scroll and use a bounded cache. From Queue, highlight a saved song
+and press l to preview its lyrics without starting playback. `lyrics = false`
+disables lookup.
 Coverage depends on LRCLIB; no match is reported honestly, never substituted with
 a different song. See [lyrics details](docs/lyrics.md).
 Real artwork is rendered lazily from Apple image hosts when the connected backend
