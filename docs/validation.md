@@ -125,3 +125,11 @@ active-playback resource measurement. The legacy real browser smoke tests were
 not rerun for this native-mode check. Apple acceptance of the user's token,
 native decoding, live source quality and complete-song playback remain unverified
 and unavailable in the default backend.
+
+The earlier login-only PTY helper was also corrected to use `daemon = false`
+and stop its private service in failure cleanup. Repeating it under
+`dbus-run-session` passed hidden CLI/TUI input, private storage, cancellation and
+the new no-leftover-service assertion. Eight abandoned login-test services from
+already-deleted temporary directories were terminated after checking their UID,
+command and isolated XDG path. The user's existing service was preserved; it
+still runs an older executable until restarted.

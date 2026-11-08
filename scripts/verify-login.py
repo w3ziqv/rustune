@@ -35,6 +35,10 @@ with tempfile.TemporaryDirectory(prefix='rustune-login-') as d:
     run(b'\x1b')
     assert file.read_bytes()==token,'cancel replaced existing token'
     assert not list(Path(d).rglob('service.pid')),'token login started a playback service'
+    config=file.with_name('config.toml')
+    config.write_text('daemon = false\n')
+    config.chmod(0o600)
+    runtime=Path(env['XDG_RUNTIME_DIR'])/'rustune'
     master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',30,100,0,0));process=subprocess.Popen([binary],stdin=slave,stdout=slave,stderr=slave,env=env,start_new_session=True);os.close(slave)
     captured=bytearray()
     def drain_tui(seconds):
@@ -54,7 +58,13 @@ with tempfile.TemporaryDirectory(prefix='rustune-login-') as d:
         assert replacement not in captured,'TUI exposed the token'
         assert replacement not in re.sub(rb'\x1b\[[0-?]*[ -/]*[@-~]',b'',captured),'TUI exposed the token across terminal escape sequences'
         os.write(master,b'q');drain_tui(.2);process.wait(timeout=5);assert process.returncode==0
+        assert not (runtime/'service.pid').exists(),'TUI left its test service running'
     finally:
         if process.poll() is None:process.kill();process.wait()
         os.close(master)
+        if (runtime/'service.sock').exists():
+            subprocess.run([binary,'ctl','stop'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=6,check=False)
+            deadline=time.monotonic()+5
+            while (runtime/'service.pid').exists() and time.monotonic()<deadline:time.sleep(.02)
+            assert not (runtime/'service.pid').exists(),'test service did not stop during cleanup'
     print('Hidden token login and cancellation: passed; no account or playback verification')
