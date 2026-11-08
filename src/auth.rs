@@ -116,7 +116,7 @@ pub fn apply(paths: &Paths, job: LocalAuth) -> Result<()> {
     }
 }
 
-pub const SAVED_MESSAGE: &str = "Token saved locally (0600). Apple account acceptance is not verified. Native playback is unavailable.";
+pub const SAVED_MESSAGE: &str = "Token saved locally (0600). Apple account acceptance is not verified yet; choose a song and Play to check native playback.";
 
 struct RawInput;
 fn feedback_line(input: &TokenInput, width: u16) -> String {

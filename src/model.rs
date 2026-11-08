@@ -36,9 +36,27 @@ pub struct Playback {
     pub preview: bool,
     /// An explicitly reported target, never a measured source bitrate.
     pub target_bitrate_kbps: Option<u16>,
+    pub source_codec: Option<String>,
+    pub source_sample_rate_hz: Option<u32>,
+    pub source_channels: Option<u16>,
+    pub encrypted_packets: u64,
+    pub decoded_audio_frames: u64,
+    pub nonzero_output_samples: u64,
 }
 impl Playback {
     pub fn quality_label(&self) -> String {
+        if let (Some(codec), Some(rate), Some(channels)) = (
+            &self.source_codec,
+            self.source_sample_rate_hz,
+            self.source_channels,
+        ) {
+            return format!(
+                "{codec} · {:.1} kHz · {channels} ch · reported target {} kb/s",
+                f64::from(rate) / 1000.0,
+                self.target_bitrate_kbps
+                    .map_or("unknown".into(), |v| v.to_string())
+            );
+        }
         match self.target_bitrate_kbps {
             Some(n @ (64 | 256)) => format!("Reported target {n} kb/s · source quality unknown"),
             _ => "Source quality unknown".into(),

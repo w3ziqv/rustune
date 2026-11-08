@@ -33,6 +33,11 @@ pub enum Request {
         play: bool,
     },
     PlayIndex(usize),
+    PlayQueued {
+        revision: u64,
+        index: usize,
+        id: String,
+    },
     Remove(usize),
     QueueEdit {
         revision: u64,

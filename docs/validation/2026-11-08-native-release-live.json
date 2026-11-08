@@ -1,0 +1,1849 @@
+{
+  "binary_sha256": "33d66d087c5f53b8f47d9fe05357b6b8a0aa6001c2cf8d3bd308b539140a7b88",
+  "checks": [
+    "isolated real native service starts",
+    "actual release TUI renders",
+    "keyboard opens real queue",
+    "keyboard opens song actions",
+    "keyboard Play starts native CDM audio",
+    "public application authorization fetched anonymously without a prefilled cache",
+    "public application authorization cache is private",
+    "Apple full-stream authorization verified without preview fallback",
+    "keyboard pause reaches native worker",
+    "paused device clock remains stable",
+    "keyboard resumes native audio",
+    "keyboard raises software volume",
+    "keyboard mutes native audio",
+    "keyboard restores previous volume",
+    "native encrypted stream seeks forward",
+    "native encrypted stream seeks backward",
+    "active native audio can pause after local logout",
+    "active volume remains controllable after logout",
+    "restored local token and active audio resume",
+    "Next starts another native worker",
+    "replaced native worker is reaped",
+    "Previous starts the preceding queued song",
+    "complete-song test restarts at the beginning through the real service",
+    "full-song verification begins at zero without seeking",
+    "TUI displays decoder-reported AAC sample rate",
+    "real cover renders during native playback",
+    "real output reaches the complete manifest duration",
+    "entire subscribed song decrypted decoded and sent to real audio output",
+    "complete playback uses no preview or owned browser",
+    "completed worker is closed and reaped"
+  ],
+  "live_subscribed_playback": true,
+  "owned_browser_processes": 0,
+  "measurements": [
+    {
+      "seconds": 0.0031801330005691852,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 9
+        },
+        {
+          "Rss": 40204,
+          "Pss": 14109,
+          "pid": 227726,
+          "cpu_ticks": 35
+        },
+        {
+          "Rss": 148680,
+          "Pss": 118043,
+          "pid": 227800,
+          "cpu_ticks": 102
+        }
+      ],
+      "total_rss_kib": 223540,
+      "total_pss_kib": 142246
+    },
+    {
+      "seconds": 5.112791791998461,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 9
+        },
+        {
+          "Rss": 40204,
+          "Pss": 14109,
+          "pid": 227726,
+          "cpu_ticks": 38
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 111
+        }
+      ],
+      "total_rss_kib": 223584,
+      "total_pss_kib": 142290
+    },
+    {
+      "seconds": 10.222188487001404,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 9
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 41
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 120
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 15.332583123999939,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 10
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 45
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 129
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 20.44282736600144,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 10
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 49
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 138
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 25.5524986599994,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 10
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 52
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 147
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 30.662815513998794,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 11
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 55
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 156
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 35.77274356500129,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 11
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 58
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 165
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 40.88295260599989,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 11
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 62
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 174
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 45.993453033999685,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 11
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 65
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 184
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 51.103996186000586,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 12
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 68
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 194
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 56.21446842300065,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 12
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 71
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118204,
+          "pid": 227800,
+          "cpu_ticks": 204
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142343
+    },
+    {
+      "seconds": 61.32523603300069,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 12
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 74
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118204,
+          "pid": 227800,
+          "cpu_ticks": 213
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142343
+    },
+    {
+      "seconds": 66.43671979500141,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 12
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 77
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118204,
+          "pid": 227800,
+          "cpu_ticks": 223
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142343
+    },
+    {
+      "seconds": 71.54829202499968,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 13
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 80
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118204,
+          "pid": 227800,
+          "cpu_ticks": 234
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142343
+    },
+    {
+      "seconds": 76.66041254599986,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 14
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 84
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 247
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 81.77154139900085,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 14
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 87
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118204,
+          "pid": 227800,
+          "cpu_ticks": 258
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142343
+    },
+    {
+      "seconds": 86.8830496920018,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 14
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 91
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 269
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 91.99470429999928,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10091,
+          "pid": 227725,
+          "cpu_ticks": 14
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14043,
+          "pid": 227726,
+          "cpu_ticks": 95
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118084,
+          "pid": 227800,
+          "cpu_ticks": 281
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142218
+    },
+    {
+      "seconds": 97.12707925699942,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 15
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 100
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 305
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 102.23785608400067,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 16
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 103
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 315
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 107.3498731869986,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 16
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 106
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 324
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 112.46149456100102,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10088,
+          "pid": 227725,
+          "cpu_ticks": 16
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14038,
+          "pid": 227726,
+          "cpu_ticks": 109
+        },
+        {
+          "Rss": 148724,
+          "Pss": 117893,
+          "pid": 227800,
+          "cpu_ticks": 334
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142019
+    },
+    {
+      "seconds": 117.57630381299896,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10091,
+          "pid": 227725,
+          "cpu_ticks": 17
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14043,
+          "pid": 227726,
+          "cpu_ticks": 113
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118084,
+          "pid": 227800,
+          "cpu_ticks": 348
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142218
+    },
+    {
+      "seconds": 122.72511586800101,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10069,
+          "pid": 227725,
+          "cpu_ticks": 17
+        },
+        {
+          "Rss": 40140,
+          "Pss": 13970,
+          "pid": 227726,
+          "cpu_ticks": 118
+        },
+        {
+          "Rss": 148724,
+          "Pss": 117996,
+          "pid": 227800,
+          "cpu_ticks": 373
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142035
+    },
+    {
+      "seconds": 127.83706058700045,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 17
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 122
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 383
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 132.9490908480002,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 18
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 125
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 392
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 138.06199083500178,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 18
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 128
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 401
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 143.17551730700143,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 18
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 131
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 411
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 148.2889853179986,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 18
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 134
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 421
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 153.40110792300038,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 19
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 138
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 430
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 158.51402069599862,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 19
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 141
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 442
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 163.62683602200195,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 19
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 144
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 453
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 168.7386707959995,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 20
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 147
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 463
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 173.8510114410019,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10089,
+          "pid": 227725,
+          "cpu_ticks": 21
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14041,
+          "pid": 227726,
+          "cpu_ticks": 150
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118082,
+          "pid": 227800,
+          "cpu_ticks": 473
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142212
+    },
+    {
+      "seconds": 178.9633120469989,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10089,
+          "pid": 227725,
+          "cpu_ticks": 21
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14041,
+          "pid": 227726,
+          "cpu_ticks": 155
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118082,
+          "pid": 227800,
+          "cpu_ticks": 482
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142212
+    },
+    {
+      "seconds": 184.07615181200163,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10089,
+          "pid": 227725,
+          "cpu_ticks": 21
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14041,
+          "pid": 227726,
+          "cpu_ticks": 158
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118082,
+          "pid": 227800,
+          "cpu_ticks": 491
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142212
+    },
+    {
+      "seconds": 189.18859384900134,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10089,
+          "pid": 227725,
+          "cpu_ticks": 21
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14041,
+          "pid": 227726,
+          "cpu_ticks": 161
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118082,
+          "pid": 227800,
+          "cpu_ticks": 499
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142212
+    },
+    {
+      "seconds": 194.30121765299918,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10089,
+          "pid": 227725,
+          "cpu_ticks": 22
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14041,
+          "pid": 227726,
+          "cpu_ticks": 164
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118082,
+          "pid": 227800,
+          "cpu_ticks": 507
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142212
+    },
+    {
+      "seconds": 199.4138087149986,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10089,
+          "pid": 227725,
+          "cpu_ticks": 22
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14041,
+          "pid": 227726,
+          "cpu_ticks": 167
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118082,
+          "pid": 227800,
+          "cpu_ticks": 516
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142212
+    },
+    {
+      "seconds": 204.528097118,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 22
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 170
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 526
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 209.64228844199897,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 23
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 174
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118204,
+          "pid": 227800,
+          "cpu_ticks": 540
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142343
+    },
+    {
+      "seconds": 214.7551075730007,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 23
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 177
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118204,
+          "pid": 227800,
+          "cpu_ticks": 549
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142343
+    },
+    {
+      "seconds": 219.86795176799933,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 23
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 181
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118204,
+          "pid": 227800,
+          "cpu_ticks": 557
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142343
+    },
+    {
+      "seconds": 224.98243170800197,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 23
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 184
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 568
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 230.0958428949998,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 24
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 188
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 578
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 235.2093025139984,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 24
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 191
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 589
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 240.32239064299938,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 24
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 194
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 601
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 245.43588159000137,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 24
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 198
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 611
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 250.54905038699872,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 25
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 201
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 621
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 255.6625079939986,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 26
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 204
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 631
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 260.77625791800165,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 26
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 207
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 641
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 265.88962743799857,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 27
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 211
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 650
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 271.00489308300166,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 27
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 215
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 660
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 276.1182828150013,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 27
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 218
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 670
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 281.2316441760013,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 27
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 221
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 679
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 286.34581396499925,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 27
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 225
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 689
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 291.46111522700085,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 28
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 228
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 698
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 296.57405794900114,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10094,
+          "pid": 227725,
+          "cpu_ticks": 28
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14045,
+          "pid": 227726,
+          "cpu_ticks": 231
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118087,
+          "pid": 227800,
+          "cpu_ticks": 707
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142226
+    },
+    {
+      "seconds": 301.68788123000195,
+      "processes": [
+        {
+          "Rss": 34656,
+          "Pss": 10092,
+          "pid": 227725,
+          "cpu_ticks": 28
+        },
+        {
+          "Rss": 40140,
+          "Pss": 14044,
+          "pid": 227726,
+          "cpu_ticks": 234
+        },
+        {
+          "Rss": 148724,
+          "Pss": 118085,
+          "pid": 227800,
+          "cpu_ticks": 717
+        }
+      ],
+      "total_rss_kib": 223520,
+      "total_pss_kib": 142221
+    },
+    {
+      "seconds": 306.8023720570018,
+      "processes": [
+        {
+          "Rss": 34592,
+          "Pss": 10081,
+          "pid": 227725,
+          "cpu_ticks": 29
+        },
+        {
+          "Rss": 40076,
+          "Pss": 14033,
+          "pid": 227726,
+          "cpu_ticks": 238
+        },
+        {
+          "Rss": 148596,
+          "Pss": 118042,
+          "pid": 227800,
+          "cpu_ticks": 729
+        }
+      ],
+      "total_rss_kib": 223264,
+      "total_pss_kib": 142156
+    },
+    {
+      "seconds": 311.91695151300155,
+      "processes": [
+        {
+          "Rss": 34592,
+          "Pss": 10081,
+          "pid": 227725,
+          "cpu_ticks": 29
+        },
+        {
+          "Rss": 40076,
+          "Pss": 14033,
+          "pid": 227726,
+          "cpu_ticks": 241
+        },
+        {
+          "Rss": 148596,
+          "Pss": 118042,
+          "pid": 227800,
+          "cpu_ticks": 741
+        }
+      ],
+      "total_rss_kib": 223264,
+      "total_pss_kib": 142156
+    },
+    {
+      "seconds": 317.0327393820007,
+      "processes": [
+        {
+          "Rss": 34592,
+          "Pss": 10081,
+          "pid": 227725,
+          "cpu_ticks": 30
+        },
+        {
+          "Rss": 40076,
+          "Pss": 14033,
+          "pid": 227726,
+          "cpu_ticks": 244
+        },
+        {
+          "Rss": 148596,
+          "Pss": 118042,
+          "pid": 227800,
+          "cpu_ticks": 752
+        }
+      ],
+      "total_rss_kib": 223264,
+      "total_pss_kib": 142156
+    },
+    {
+      "seconds": 322.18613429700054,
+      "processes": [
+        {
+          "Rss": 34592,
+          "Pss": 10081,
+          "pid": 227725,
+          "cpu_ticks": 30
+        },
+        {
+          "Rss": 40076,
+          "Pss": 14033,
+          "pid": 227726,
+          "cpu_ticks": 249
+        },
+        {
+          "Rss": 148596,
+          "Pss": 118042,
+          "pid": 227800,
+          "cpu_ticks": 775
+        }
+      ],
+      "total_rss_kib": 223264,
+      "total_pss_kib": 142156
+    },
+    {
+      "seconds": 327.305873704001,
+      "processes": [
+        {
+          "Rss": 34592,
+          "Pss": 10083,
+          "pid": 227725,
+          "cpu_ticks": 30
+        },
+        {
+          "Rss": 40076,
+          "Pss": 14035,
+          "pid": 227726,
+          "cpu_ticks": 253
+        },
+        {
+          "Rss": 148596,
+          "Pss": 118044,
+          "pid": 227800,
+          "cpu_ticks": 791
+        }
+      ],
+      "total_rss_kib": 223264,
+      "total_pss_kib": 142162
+    },
+    {
+      "seconds": 332.41977987000064,
+      "processes": [
+        {
+          "Rss": 34592,
+          "Pss": 10083,
+          "pid": 227725,
+          "cpu_ticks": 30
+        },
+        {
+          "Rss": 40076,
+          "Pss": 14035,
+          "pid": 227726,
+          "cpu_ticks": 257
+        },
+        {
+          "Rss": 148596,
+          "Pss": 118044,
+          "pid": 227800,
+          "cpu_ticks": 801
+        }
+      ],
+      "total_rss_kib": 223264,
+      "total_pss_kib": 142162
+    },
+    {
+      "seconds": 337.5336141500011,
+      "processes": [
+        {
+          "Rss": 34592,
+          "Pss": 10083,
+          "pid": 227725,
+          "cpu_ticks": 31
+        },
+        {
+          "Rss": 40076,
+          "Pss": 14035,
+          "pid": 227726,
+          "cpu_ticks": 260
+        },
+        {
+          "Rss": 148596,
+          "Pss": 118044,
+          "pid": 227800,
+          "cpu_ticks": 811
+        }
+      ],
+      "total_rss_kib": 223264,
+      "total_pss_kib": 142162
+    },
+    {
+      "seconds": 342.64859643399905,
+      "processes": [
+        {
+          "Rss": 34592,
+          "Pss": 10083,
+          "pid": 227725,
+          "cpu_ticks": 32
+        },
+        {
+          "Rss": 40076,
+          "Pss": 14035,
+          "pid": 227726,
+          "cpu_ticks": 263
+        },
+        {
+          "Rss": 148596,
+          "Pss": 118044,
+          "pid": 227800,
+          "cpu_ticks": 820
+        }
+      ],
+      "total_rss_kib": 223264,
+      "total_pss_kib": 142162
+    },
+    {
+      "seconds": 347.7627696439995,
+      "processes": [
+        {
+          "Rss": 34592,
+          "Pss": 10083,
+          "pid": 227725,
+          "cpu_ticks": 32
+        },
+        {
+          "Rss": 40076,
+          "Pss": 14035,
+          "pid": 227726,
+          "cpu_ticks": 267
+        },
+        {
+          "Rss": 148596,
+          "Pss": 118044,
+          "pid": 227800,
+          "cpu_ticks": 830
+        }
+      ],
+      "total_rss_kib": 223264,
+      "total_pss_kib": 142162
+    },
+    {
+      "seconds": 352.87665044499954,
+      "processes": [
+        {
+          "Rss": 34592,
+          "Pss": 10083,
+          "pid": 227725,
+          "cpu_ticks": 32
+        },
+        {
+          "Rss": 40076,
+          "Pss": 14035,
+          "pid": 227726,
+          "cpu_ticks": 270
+        },
+        {
+          "Rss": 148596,
+          "Pss": 118044,
+          "pid": 227800,
+          "cpu_ticks": 839
+        }
+      ],
+      "total_rss_kib": 223264,
+      "total_pss_kib": 142162
+    },
+    {
+      "seconds": 357.9903994140004,
+      "processes": [
+        {
+          "Rss": 34592,
+          "Pss": 10083,
+          "pid": 227725,
+          "cpu_ticks": 33
+        },
+        {
+          "Rss": 40076,
+          "Pss": 14035,
+          "pid": 227726,
+          "cpu_ticks": 273
+        },
+        {
+          "Rss": 148596,
+          "Pss": 118044,
+          "pid": 227800,
+          "cpu_ticks": 848
+        }
+      ],
+      "total_rss_kib": 223264,
+      "total_pss_kib": 142162
+    }
+  ],
+  "last_playback": {
+    "authorized": true,
+    "decoded_audio_frames": 15493,
+    "duration": 359.7278699999998,
+    "encrypted_packets": 15493,
+    "ended": true,
+    "nonzero_output_samples": 31492801,
+    "playing": false,
+    "position": 359.7467573696145,
+    "preview": false,
+    "source_channels": 2,
+    "source_codec": "AAC",
+    "source_sample_rate_hz": 44100,
+    "state": 4,
+    "target_bitrate_kbps": 256,
+    "track": {
+      "album": "Pronounced Leh-Nerd Skin-Nerd (Bonus Tracks)",
+      "artist": "Lynyrd Skynyrd",
+      "artwork": "https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/1e/5c/85/1e5c85bb-2b43-3057-da09-39446321a191/06UMGIM14960.rgb.jpg/{w}x{h}bb.jpg",
+      "duration_ms": 359680,
+      "id": "1440838314",
+      "kind": "songs",
+      "title": "Simple Man",
+      "url": null
+    },
+    "volume": 0.3
+  },
+  "message": "Native playback reached the end of the complete stream",
+  "elapsed_full_test_seconds": 359.7948856740004,
+  "source_quality": "AAC",
+  "sampled_cpu_percent_one_core": 2.8157429810609433,
+  "sampled_cpu_seconds": 357.98721928099985,
+  "binary_note": "Full-song release run; subsequent final build changes only MPRIS edge capabilities and reentrant timer saturation handling, checked separately.",
+  "native_process_scope": "one isolated service instance, attached TUI and its CDM audio worker",
+  "measurement_units": "KiB; summed RSS includes shared pages once per process, PSS apportions sharing"
+}

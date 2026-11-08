@@ -24,6 +24,8 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Commands {
+    #[command(hide = true)]
+    AudioWorker,
     /// Diagnose private token storage and native playback capabilities
     Doctor,
     /// Measure application RSS, PSS and sampled CPU as JSON
@@ -78,6 +80,7 @@ async fn main() -> Result<()> {
     let paths = Paths::discover()?;
     let config = Config::load(&paths)?;
     match cli.command {
+        Some(Commands::AudioWorker) => rustune::backend::worker::run(&paths).await?,
         Some(Commands::Login) => rustune::auth::prompt_login(&paths)?,
         Some(Commands::Logout) => {
             rustune::auth::remove_user_token(&paths)?;
@@ -239,7 +242,14 @@ async fn doctor(config: &Config, paths: &Paths) -> Result<()> {
             "not saved; run rustune login"
         }
     );
-    println!("Native playback: unavailable; no playback engine is implemented");
+    println!(
+        "Native playback: CDM → AAC → ALSA; {}",
+        if rustune::backend::worker::available(paths) {
+            "token and CDM files present; live authorization is checked on Play"
+        } else {
+            "save a token and install a compatible CDM at ~/.cache/rustune/drm/libwidevinecdm.so"
+        }
+    );
     println!("Audio source quality: unknown");
     println!(
         "Public catalog: Apple Search/Lookup metadata, country {} (no token required)",

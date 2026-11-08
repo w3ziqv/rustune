@@ -239,29 +239,29 @@ impl Player {
     #[zbus(property)]
     fn can_go_next(&self) -> bool {
         let s = self.state.borrow();
-        s.playback_available
+        s.start_available
             && (s.current.is_some_and(|i| i + 1 < s.queue_len)
                 || (s.queue_len > 0 && (s.shuffle || s.repeat == Repeat::All)))
     }
     #[zbus(property)]
     fn can_go_previous(&self) -> bool {
         let s = self.state.borrow();
-        s.playback_available && s.current.is_some_and(|i| i > 0)
+        s.start_available && s.current.is_some_and(|i| i > 0)
     }
     #[zbus(property)]
     fn can_play(&self) -> bool {
         let s = self.state.borrow();
-        s.playback_available && s.queue_len > 0
+        s.audio_pid.is_some() || (s.start_available && s.queue_len > 0)
     }
     #[zbus(property)]
     fn can_pause(&self) -> bool {
         let s = self.state.borrow();
-        s.playback_available && s.playback.track.is_some()
+        s.audio_pid.is_some() && s.playback.track.is_some()
     }
     #[zbus(property)]
     fn can_seek(&self) -> bool {
         let s = self.state.borrow();
-        s.playback_available && s.playback.duration > 0.0
+        s.audio_pid.is_some() && s.playback.duration > 0.0
     }
     #[zbus(property)]
     fn can_control(&self) -> bool {
@@ -329,6 +329,20 @@ pub async fn start(
 #[cfg(test)]
 mod capability_tests {
     use super::*;
+    #[test]
+    fn transport_capabilities_follow_active_audio_after_queue_clear_and_eof() {
+        for (audio_pid, queue_len, can_play, can_pause) in
+            [(Some(2u32), 0, true, true), (None, 2, true, false)]
+        {
+            let status:Status=serde_json::from_value(serde_json::json!({"playback":{"duration":100.0,"track":{"id":"saved"}},"queue_len":queue_len,"current":null,"repeat":"off","shuffle":false,"profile":"balanced","pid":1,"browser_pid":null,"audio_pid":audio_pid,"start_available":true,"backend":"native","browser_shared":false,"playback_available":true,"uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null})).unwrap();
+            let (tx, _) = tokio::sync::mpsc::channel(1);
+            let (_, state) = watch::channel(status);
+            let player = Player { tx, state };
+            assert_eq!(player.can_play(), can_play);
+            assert_eq!(player.can_pause(), can_pause);
+            assert_eq!(player.can_seek(), can_pause);
+        }
+    }
     #[test]
     fn disabled_engine_does_not_advertise_restored_queue_as_playable() {
         let status:Status=serde_json::from_value(serde_json::json!({

@@ -783,9 +783,7 @@ impl App {
                     self.note = "Lyrics preview for the selected song; playback unchanged.".into();
                 }
             }
-            Some("visualizer") => self.note =
-                "Visualizer unavailable: protected audio samples are not exposed by this backend."
-                    .into(),
+            Some("visualizer") => self.note = "Visualizer is not implemented in this build.".into(),
             _ => match k.code {
                 KeyCode::Char(c @ '1'..='9') => {
                     req = self.go(c as usize - '1' as usize);
@@ -1011,7 +1009,9 @@ impl App {
                 s.map_or(0, |s| s.queue_len),
                 s.map_or(crate::model::Repeat::Off, |s| s.repeat),
                 s.is_some_and(|s| s.shuffle),
-                if self.token_stored {
+                if s.is_some_and(|s| s.playback.authorized) {
+                    "Token accepted for native playback"
+                } else if self.token_stored {
                     "Token saved locally · account unverified"
                 } else {
                     "L  Enter Music User Token"
@@ -1020,7 +1020,7 @@ impl App {
             if matches!(self.screen, 2 | 4 | 5) {
                 let item = self.items.get(self.selected);
                 info = format!(
-                    "APPLE / ITUNES CATALOG\n\nNo token required\nCountry: {}\n\nEnter / →: actions or open\n←: previous results / menu\nPgUp / PgDn: pages\n\nStore link:\n{}\n\nNative audio unavailable",
+                    "APPLE / ITUNES CATALOG\n\nNo token required for search\nCountry: {}\n\nEnter / →: actions or open\n←: previous results / menu\nPgUp / PgDn: pages\n\nStore link:\n{}\n\nChoose Play for native audio",
                     self.status
                         .as_ref()
                         .map_or(self.config.catalog_country.as_str(), |s| s
@@ -1212,12 +1212,12 @@ impl App {
             return;
         }
         let text=match self.screen {
-            0=>"YOUR MUSIC. YOUR TERMINAL.\n\nPublic Apple/iTunes catalog: search songs, albums and artists without a token.\n↑/↓ and Enter navigate; ← opens the menu; Settings is keyboard actionable.\n\nNative Apple Music playback is not implemented in this build.\nL enters a Music User Token; saving it does not verify account acceptance.\n\nTab switches navigation focus. 1–9 open screens.\n:theme monochrome | tokyo_night changes the palette.\n:profile minimal disables artwork and reduces caches.\n\nEXPERIMENTAL · See Audio Settings for available capabilities.".into(),
+            0=>"YOUR MUSIC. YOUR TERMINAL.\n\nPublic Apple/iTunes catalog: search songs, albums and artists without a token.\n↑/↓ and Enter navigate; ← opens the menu; Settings is keyboard actionable.\n\nNative playback uses your Music User Token and a local CDM.\nSearch → choose a song → Enter → Play.\nL enters a Music User Token; saving it does not verify account acceptance.\n\nTab switches navigation focus. 1–9 open screens.\n:theme monochrome | tokyo_night changes the palette.\n:profile minimal disables artwork and reduces caches.\n\nEXPERIMENTAL · See Audio Settings for available capabilities.".into(),
 
-            1=>self.status.as_ref().and_then(|s|s.playback.track.as_ref()).map_or("Nothing playing. No audio quality has been reported.".into(),|t|format!("NOW PLAYING\n\n{}\n{}\n{}\n\n{}\n\nSpace  Play/pause\n← / →  Seek 10 seconds\n+ / -  Volume\nn / p  Next / previous\ns      Shuffle\nr      Repeat\nm      Mute\n\n:sleep MINUTES sets a sleep timer (0 cancels).",t.title,t.artist,t.album,self.status.as_ref().map(|s|s.playback.quality_label()).unwrap_or_default())),
+            1=>self.status.as_ref().and_then(|s|s.playback.track.as_ref()).map_or("Nothing playing. No audio quality has been reported.".into(),|t|format!("NOW PLAYING\n\n{}\n{}\n{}\n\n{}\n\nSpace  Play/pause\nAlt-← / →  Seek 10 seconds\n+ / -  Volume\nn / p  Next / previous\ns      Shuffle\nr      Repeat\nm      Mute\n\n:sleep MINUTES sets a sleep timer (0 cancels).",t.title,t.artist,t.album,self.status.as_ref().map(|s|s.playback.quality_label()).unwrap_or_default())),
 
-            9=>"EQUALIZER · UNAVAILABLE\n\n31  62  125  250  500  1k  2k  4k  8k  16k Hz\n\nProtected playback does not expose a verified PCM signal to Rustune.\nEQ, preamp, bass, treble, normalization, crossfade and visualizer are disabled.\n\nUse your existing PipeWire DSP chain (for example EasyEffects) externally.\nNo processing or gapless guarantees are claimed.".into(),
-            10=>format!("AUDIO SETTINGS\n\n● Auto               Backend chooses stream quality\n○ Data Saver         Unavailable\n○ Standard           Unavailable\n○ High Quality       Unavailable\n○ Lossless           Unavailable\n○ Hi-Res Lossless    Unavailable\n\nBackend: {}\n{}\n\nSource codec        Unknown\nSource sample rate  Unknown\nSource bit depth    Unknown\nSource channels     Unknown\nBuffer status       Unknown\n\nQuality is shown only when a native backend reports reliable source fields.\nPipeWire output format does not establish source quality.",self.status.as_ref().map_or("No playback process",|s|s.backend.as_str()),self.status.as_ref().map_or("Source quality unknown".into(),|s|s.playback.quality_label())),
+            9=>"EQUALIZER · UNAVAILABLE\n\n31  62  125  250  500  1k  2k  4k  8k  16k Hz\n\nDSP controls are not implemented in this build.\nEQ, preamp, bass, treble, normalization, crossfade and visualizer are disabled.\n\nUse your existing PipeWire DSP chain (for example EasyEffects) externally.\nNo processing or gapless guarantees are claimed.".into(),
+            10=>format!("AUDIO SETTINGS\n\n● Auto               Backend chooses stream quality\n○ Data Saver         Unavailable\n○ Standard           Unavailable\n○ High Quality       Unavailable\n○ Lossless           Unavailable\n○ Hi-Res Lossless    Unavailable\n\nBackend: {}\n{}\n\nSource codec/rate/channels are reported above when active.\nSource bit depth    Unknown\nBuffer status       Device clock\n\nQuality is shown only when a native backend reports reliable source fields.\nPipeWire output format does not establish source quality.",self.status.as_ref().map_or("No playback process",|s|s.backend.as_str()),self.status.as_ref().map_or("Source quality unknown".into(),|s|s.playback.quality_label())),
             11=>format!("SETTINGS\n\nTheme: {}\nResources: {:?}\n\n:theme dark | light | catppuccin_mocha | catppuccin_latte\n:theme gruvbox | nord | monochrome | tokyo_night | custom\n:profile minimal | balanced | enhanced\n\n~/.config/rustune/config.toml\nKeybindings, custom colors, notifications, mouse\nand daemon behavior can be configured there.\n\n:login  :logout  :sleep MINUTES  :clear  :history\nDaemon mode keeps playback running when the TUI closes.",self.config.theme,self.status.as_ref().map_or(self.config.performance,|s|s.profile)),
             _=>{let mut s="HELP · DEFAULT BINDINGS\n\n".to_owned();for (action,key) in keys::DEFAULTS {s.push_str(&format!("{key:<12}{action}   "));if s.lines().last().is_some_and(|l|l.len()>65){s.push('\n');}}s.push_str("\n\n←/Esc menu · ↑/↓ choose · Enter/→ open. Tab cycles focus.\nSongs: Enter opens actions. Settings: ↑/↓ then Enter changes a value.\nSearch: Tab/F2 changes songs/albums/artists. PgUp/PgDn changes pages.\n← returns from an album or lyrics to previous results. Alt-←/→ seeks.\nQueue: Delete removes; J/K reorder; :clear clears.\nCommands: :login :logout :profile MODE :theme NAME\n:sleep MINUTES :recent :history :queue :audio :help\nCtrl-C always exits. ~/.config/rustune/config.toml customizes bindings.");s}
         };

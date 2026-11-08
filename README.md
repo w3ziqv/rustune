@@ -5,10 +5,13 @@ Default appearance: black background, white text and borders; optional Tokyo Nig
 and other palettes. The player composition uses large real artwork, metadata,
 centered lyrics, progress and mouse/keyboard controls.
 
-**Native Apple Music playback is not implemented.** Saving a Music User Token
-stores a credential locally; it does not verify Apple account acceptance or
-provide a DRM playback engine. Transport requests explain the missing engine. Public search works independently;
-personal library/playlists authorization is still unavailable. Source quality stays unknown. No release tag is published.
+Native playback uses your saved Media User Token, anonymous public Apple
+application authorization, a locally installed Widevine CDM, native AAC decoding
+and ALSA/PipeWire audio. No content keys are extracted. Apple subscription and
+license requirements remain enforced. Personal library/playlists authorization
+is still unavailable. A subscribed complete song has been verified through the
+native service and TUI; see [live validation](docs/validation.md). No release tag
+is published, and the native playback work remains local.
 
 Browser playback, browser authorization, extensions and native-messaging setup
 have been removed. Rustune does not start or connect to a browser. Music Assistant
@@ -16,7 +19,8 @@ is not a dependency.
 
 ## Install
 
-Linux, stable Rust 1.99.1 (minimum 1.99), D-Bus, and a UTF-8 terminal:
+Linux, stable Rust 1.99.1 (minimum 1.99), a C++ compiler, FFmpeg 9 development
+headers, ALSA development headers, D-Bus, and a UTF-8 terminal:
 
 ```sh
 cargo build --release
@@ -25,6 +29,12 @@ rustune init
 rustune login
 rustune
 ```
+
+Install a compatible signed `libwidevinecdm.so` privately at
+`~/.cache/rustune/drm/libwidevinecdm.so` (directory 0700, file 0600). The proprietary
+module is not redistributed in this repository. The application token is
+retrieved anonymously from Apple and cached privately; no browser session or
+cookies are read. Only your Media User Token is entered by you.
 
 Login shows bounded dots and a character count while you type or paste. Backspace
 removes a character; Ctrl-U clears; Enter saves; Esc cancels. The token is never
@@ -50,7 +60,7 @@ valid preferences, queue data and token files are preserved.
 - Lazy bounded album artwork from Apple image URLs, rendered using half blocks
   or explicit Kitty/iTerm2 protocols. Minimal mode disables artwork.
 - Private Unix-socket service, configurable keys/themes and MPRIS capabilities
-  that accurately report unavailable playback.
+  with native playback controls.
 
 LRCLIB receives only song title, artist, album and duration. Coverage varies;
 missing lyrics are reported honestly. No Apple credentials are sent to LRCLIB
@@ -77,10 +87,12 @@ EQ, visualizer, crossfade, gapless guarantees and lossless playback are unavaila
 | `?`, `q`, Ctrl-C | Help / quit |
 
 Settings are selectable with arrows and Enter. Enter on a song opens Lyrics /
-Add to queue / Play actions; unavailable audio is labeled. Player buttons receive
+Add to queue / Play actions. Player buttons receive
 visible keyboard focus and activate with Enter.
 
-Transport buttons and shortcuts report why native playback is unavailable.
+Transport controls operate the native audio worker. Source codec, sample rate
+and channels come from the decoder; the 256 kb/s target is labeled as reported.
+Source bit depth and lossless support remain unknown/unavailable.
 `daemon = false` (default) stops an automatically created service when the TUI
 closes. An already running service is preserved. Use `rustune ctl stop` to stop
 it deliberately, or `rustune daemon` to run it in the foreground.

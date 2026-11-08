@@ -1,5 +1,50 @@
 # Validation — 2026-11-08
 
+## Native subscribed playback verified
+
+The real native CDM/AAC/ALSA backend played the complete subscribed catalog song
+“Simple Man”: 359.746757 seconds against a 359.72787-second full manifest,
+15,493 encrypted packets decrypted and AAC frames decoded, and 31,517,516
+nonzero output samples. This was full-stream audio, not a preview, with no owned
+browser or Music Assistant runtime. The release service/TUI test passed 30 checks
+including keyboard Play, pause/resume, volume/mute, seeking both directions,
+Next/Previous, post-logout controls, real artwork and displayed source format.
+It also fetched public application authorization anonymously from an empty cache.
+
+[Full-song report](validation/2026-11-08-native-release-live.json) identifies that
+release binary by SHA-256. Two final edge fixes subsequently corrected MPRIS
+capabilities after queue clear/EOF and timer scheduling at capacity. The final
+installed build separately passed 34 real native [control checks](validation/2026-11-08-native-controls.json),
+including private-session D-Bus properties, post-logout transport, near-end
+pause/resume and verified EOF. That control run seeks and explicitly does not
+claim a second complete-song test. The [installation report](validation/2026-11-08-native-installed.json)
+confirms the installed binary matches the final release, and preserves the real
+user token (including inode/mtime), configuration and all 11 queue records.
+
+During complete-song playback, all three owned processes (service, TUI, audio
+worker) peaked at summed RSS 223,584 KiB and PSS 142,343 KiB. Sampled CPU was
+2.816% of one core over the recorded interval. The CDM is included in these
+figures; browser process count is zero. These are active measurements, distinct
+from earlier idle numbers. Source AAC, 44.1 kHz and stereo come from the native
+decoder; 256 kb/s is labeled as a reported target. Source bit depth/lossless
+remain unknown/unavailable. Personal library and playlists are not implemented.
+
+Final format, Clippy with warnings denied, 84 Rust tests, release build and
+RustSec audit passed. Three public-network/visual tests remain intentionally
+opt-in. The source-built CDM host has a separate passing C++ timer test, including
+monotonic deadlines and reentrant scheduling at the 128-timer bound. An
+independent reviewer found the PCM, EOF, logout, drain, queue identity and timer
+issues; fixes have failing-then-passing regression coverage. Credential matching
+found no supplied user/public application token in repository files.
+
+No push, PR, tag or release was made for this work. Credentials and the proprietary
+CDM binary remain outside the repository.
+
+The installed final binary also passed all 52 [keyboard-only checks](validation/2026-11-08-native-keyboard.json)
+and 65 [general functional checks](validation/2026-11-08-native-functional.json).
+These two use artificial tokens and establish catalog/UI/lyrics/artwork behavior;
+they are separate from the genuine subscribed playback evidence above.
+
 ## Catalog and keyboard revision
 
 All 71 Rust tests, format, Clippy with warnings denied and release build passed.
@@ -16,10 +61,9 @@ screen/offset/revision. Independent review findings on focus, stale queries and
 queue-page provenance were fixed with failing-then-passing regressions. The user's
 actual queue and token file were preserved during installation/service restart.
 
-Native token playback is a separate active goal and has **not** been achieved.
-The records below describe earlier revisions.
+The records below describe earlier revisions before native playback was added.
 
-## Current native-only revision
+## Earlier token-storage-only revision
 
 Browser controllers, Firefox extension/native-host assets, setup commands and
 browser authorization have been removed. Recognized old browser configuration

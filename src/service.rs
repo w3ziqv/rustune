@@ -1,3 +1,7 @@
+use crate::backend::{
+    controller::Controller,
+    worker::{Control, Event},
+};
 use crate::{
     catalog::Catalog,
     config::{Config, Paths, PerformanceMode, private_write},
@@ -33,9 +37,13 @@ pub struct Status {
     pub catalog_country: String,
     pub pid: u32,
     pub browser_pid: Option<u32>,
+    #[serde(default)]
+    pub audio_pid: Option<u32>,
     pub backend: String,
     #[serde(default)]
     pub playback_available: bool,
+    #[serde(default)]
+    pub start_available: bool,
     pub browser_shared: bool,
     pub uptime_secs: u64,
     pub cache_entries: usize,
@@ -106,12 +114,148 @@ struct Engine {
     message: String,
     shutdown: bool,
     dismissed: Option<String>,
+    audio: Option<Controller>,
+    audio_generation: u64,
+    event_tx: mpsc::Sender<(u64, Event)>,
+    events: mpsc::Receiver<(u64, Event)>,
+    sleep_until: Option<Instant>,
+    unmuted_volume: f64,
 }
 impl Engine {
+    async fn start_audio(&mut self, index: usize) -> Result<()> {
+        ensure!(
+            crate::backend::worker::available(&self.paths),
+            crate::backend::NATIVE_UNAVAILABLE
+        );
+        let track = self
+            .queue
+            .tracks
+            .get(index)
+            .ok_or_else(|| anyhow::anyhow!("Queue index out of range"))?
+            .clone();
+        Control::Start {
+            id: track.id.clone(),
+            volume: self.playback.volume,
+        }
+        .validate()?;
+        if let Some(audio) = self.audio.take() {
+            audio.stop().await;
+        }
+        self.audio_generation = self.audio_generation.wrapping_add(1);
+        self.audio = Some(
+            Controller::start(
+                track.id.clone(),
+                self.playback.volume,
+                self.audio_generation,
+                self.event_tx.clone(),
+            )
+            .await?,
+        );
+        self.queue.current = Some(index);
+        self.dismissed = None;
+        self.playback = Playback {
+            volume: self.playback.volume,
+            track: Some(track),
+            state: 1,
+            ..Playback::default()
+        };
+        self.message = "Preparing native Apple playback and CDM license…".into();
+        Ok(())
+    }
+    async fn audio_control(&mut self, control: Control) -> Result<()> {
+        if self.audio.is_none() {
+            ensure!(
+                crate::backend::worker::available(&self.paths),
+                crate::backend::NATIVE_UNAVAILABLE
+            );
+        }
+        self.audio
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("No native track is active; choose a song and Play"))?
+            .send(control)
+            .await
+    }
+    async fn native_event(&mut self, generation: u64, event: Event) {
+        if generation != self.audio_generation {
+            return;
+        }
+        match event {
+            Event::Ready {
+                duration,
+                sample_rate,
+                channels,
+            } => {
+                self.playback.authorized = true;
+                self.playback.duration = duration;
+                self.playback.source_codec = Some("AAC".into());
+                self.playback.source_sample_rate_hz = Some(sample_rate);
+                self.playback.source_channels = Some(channels);
+                self.playback.target_bitrate_kbps = Some(256);
+                self.message = "Native CDM license accepted; starting Linux audio".into();
+            }
+            Event::State {
+                playing,
+                position,
+                encrypted_packets,
+                decoded_frames,
+                nonzero_samples,
+            } => {
+                self.playback.playing = playing && self.playback.authorized && decoded_frames > 0;
+                self.playback.state = if self.playback.playing { 2 } else { 3 };
+                self.playback.position = position;
+                self.playback.encrypted_packets = encrypted_packets;
+                self.playback.decoded_audio_frames = decoded_frames;
+                self.playback.nonzero_output_samples = nonzero_samples;
+                self.message = if self.playback.playing {
+                    "Native Apple Music · CDM → AAC → ALSA"
+                } else {
+                    "Native playback paused"
+                }
+                .into();
+            }
+            Event::Ended {
+                position,
+                encrypted_packets,
+                decoded_frames,
+                nonzero_samples,
+            } => {
+                self.playback.playing = false;
+                self.playback.ended = true;
+                self.playback.position = position;
+                self.playback.state = 4;
+                self.playback.encrypted_packets = encrypted_packets;
+                self.playback.decoded_audio_frames = decoded_frames;
+                self.playback.nonzero_output_samples = nonzero_samples;
+                self.message = "Native playback reached the end of the complete stream".into();
+                if let Some(audio) = self.audio.take() {
+                    audio.stop().await;
+                }
+                if self.queue.can_resume(self.playback.track.as_ref())
+                    && let Some(next) = self.queue.candidate(false)
+                {
+                    if let Err(error) = self.start_audio(next).await {
+                        self.message = error.to_string();
+                    } else {
+                        let _ = self.save();
+                    }
+                }
+            }
+            Event::Error(message) => {
+                self.playback.playing = false;
+                self.playback.state = 0;
+                self.message = message;
+                if let Some(audio) = self.audio.take() {
+                    audio.stop().await;
+                }
+            }
+        }
+    }
     fn new(config: Config, paths: Paths) -> Result<Self> {
         let p = paths.data.join("state.json");
         let mut saved = SavedState::default();
-        let mut message = "Ready. L enters a Music User Token; token storage is local and account acceptance is unverified.".to_owned();
+        let mut message =
+            "Ready. L enters a Music User Token. Search → song → Play starts native playback."
+                .to_owned();
         if config.restore_queue && p.exists() {
             match (||->Result<SavedState>{
                 ensure!(fs::metadata(&p)?.len()<=16*1024*1024,"saved state exceeds limit");
@@ -132,6 +276,8 @@ impl Engine {
             volume: config.volume,
             ..Playback::default()
         };
+        let (event_tx, events) = mpsc::channel(32);
+        let unmuted_volume = config.volume;
         Ok(Self {
             config,
             paths,
@@ -143,6 +289,12 @@ impl Engine {
             message,
             shutdown: false,
             dismissed: saved.dismissed,
+            audio: None,
+            audio_generation: 0,
+            event_tx,
+            events,
+            sleep_until: None,
+            unmuted_volume,
         })
     }
     fn status(&self) -> Status {
@@ -157,13 +309,18 @@ impl Engine {
             catalog_country: self.config.catalog_country.clone(),
             pid: std::process::id(),
             browser_pid: None,
-            backend: "Native playback unavailable".into(),
-            playback_available: false,
+            audio_pid: self.audio.as_ref().and_then(Controller::pid),
+            backend: "Native CDM / AAC / ALSA".into(),
+            playback_available: self.audio.is_some()
+                || crate::backend::worker::available(&self.paths),
+            start_available: crate::backend::worker::available(&self.paths),
             browser_shared: false,
             uptime_secs: self.started.elapsed().as_secs(),
             cache_entries: self.catalog.cache_entries(),
             message: self.message.clone(),
-            sleep_remaining: None,
+            sleep_remaining: self
+                .sleep_until
+                .map(|until| until.saturating_duration_since(Instant::now()).as_secs()),
         }
     }
     fn save(&self) -> Result<()> {
@@ -179,6 +336,19 @@ impl Engine {
     async fn handle(&mut self, request: Request) -> Result<Value> {
         let mut save = false;
         match request {
+            Request::PlayQueued {
+                revision,
+                index,
+                id,
+            } => {
+                ensure!(
+                    revision == self.queue.revision
+                        && self.queue.tracks.get(index).is_some_and(|t| t.id == id),
+                    "Queue changed; refresh it before playing this track"
+                );
+                self.start_audio(index).await?;
+                save = true;
+            }
             Request::Subscribe => anyhow::bail!("subscription requires a dedicated connection"),
             Request::Status => return Ok(serde_json::to_value(self.status())?),
             Request::QueuePage { offset } => {
@@ -210,18 +380,87 @@ impl Engine {
                         .await?,
                 )?);
             }
-            Request::Play
-            | Request::Pause
-            | Request::Toggle
-            | Request::Next
-            | Request::Previous
-            | Request::Seek(_)
-            | Request::Volume(_)
-            | Request::Mute
-            | Request::PlayIndex(_)
-            | Request::Enqueue { play: true, .. }
-            | Request::Sleep(1..) => {
-                anyhow::bail!(crate::backend::NATIVE_UNAVAILABLE);
+            Request::Play | Request::Toggle if self.audio.is_none() || self.playback.ended => {
+                ensure!(
+                    crate::backend::worker::available(&self.paths),
+                    crate::backend::NATIVE_UNAVAILABLE
+                );
+                let index = self
+                    .queue
+                    .current
+                    .or_else(|| (!self.queue.tracks.is_empty()).then_some(0))
+                    .ok_or_else(|| anyhow::anyhow!("The queue is empty; choose a song first"))?;
+                self.start_audio(index).await?;
+                save = true;
+            }
+            Request::Play => self.audio_control(Control::Pause(false)).await?,
+            Request::Pause => self.audio_control(Control::Pause(true)).await?,
+            Request::Toggle => {
+                self.audio_control(Control::Pause(self.playback.playing))
+                    .await?
+            }
+            Request::Next | Request::Previous => {
+                ensure!(
+                    crate::backend::worker::available(&self.paths),
+                    crate::backend::NATIVE_UNAVAILABLE
+                );
+                let index = if matches!(request, Request::Next) {
+                    self.queue.candidate(true)
+                } else {
+                    self.queue.current.and_then(|v| v.checked_sub(1))
+                }
+                .ok_or_else(|| anyhow::anyhow!("No track in that direction"))?;
+                self.start_audio(index).await?;
+                save = true;
+            }
+            Request::PlayIndex(index) => {
+                self.start_audio(index).await?;
+                save = true;
+            }
+            Request::Seek(position) => {
+                if self.audio.is_none() {
+                    ensure!(
+                        crate::backend::worker::available(&self.paths),
+                        crate::backend::NATIVE_UNAVAILABLE
+                    );
+                }
+                ensure!(
+                    position.is_finite() && position >= 0.0 && position < self.playback.duration,
+                    "Seek position must be within the active track"
+                );
+                self.audio_control(Control::Seek(position)).await?;
+            }
+            Request::Volume(volume) => {
+                ensure!(
+                    volume.is_finite() && (0.0..=1.0).contains(&volume),
+                    "Volume must be between 0 and 1"
+                );
+                if self.audio.is_some() {
+                    self.audio_control(Control::Volume(volume)).await?;
+                }
+                self.playback.volume = volume;
+                self.config.volume = volume;
+                self.config.save(&self.paths)?;
+            }
+            Request::Mute => {
+                let volume = if self.playback.volume > 0.0 {
+                    self.unmuted_volume = self.playback.volume;
+                    0.0
+                } else {
+                    self.unmuted_volume.max(0.1)
+                };
+                if self.audio.is_some() {
+                    self.audio_control(Control::Volume(volume)).await?;
+                }
+                self.playback.volume = volume;
+            }
+            Request::Sleep(seconds @ 1..) => {
+                ensure!(
+                    crate::backend::worker::available(&self.paths),
+                    crate::backend::NATIVE_UNAVAILABLE
+                );
+                ensure!(seconds <= 86400, "Sleep timer is limited to 24 hours");
+                self.sleep_until = Some(Instant::now() + Duration::from_secs(seconds));
             }
             Request::Shuffle => {
                 self.queue.shuffle = !self.queue.shuffle;
@@ -235,13 +474,23 @@ impl Engine {
                 };
                 save = true;
             }
-            Request::Sleep(0) => self.message = "Sleep timer cancelled".into(),
-            Request::Enqueue {
-                track,
-                next,
-                play: false,
-            } => {
+            Request::Sleep(0) => {
+                self.sleep_until = None;
+                self.message = "Sleep timer cancelled".into();
+            }
+            Request::Enqueue { track, next, play } => {
                 validate_track(&track)?;
+                if play {
+                    ensure!(
+                        crate::backend::worker::available(&self.paths),
+                        crate::backend::NATIVE_UNAVAILABLE
+                    );
+                    Control::Start {
+                        id: track.id.clone(),
+                        volume: self.playback.volume,
+                    }
+                    .validate()?;
+                }
                 ensure!(
                     track.kind == "songs" || track.kind == "library-songs",
                     "open this album/artist/playlist first"
@@ -256,6 +505,14 @@ impl Engine {
                 if next {
                     let target = self.queue.current.map_or(0, |i| i + 1);
                     self.queue.move_item(i, target);
+                }
+                if play {
+                    let index = if next {
+                        self.queue.current.map_or(0, |v| v + 1)
+                    } else {
+                        i
+                    };
+                    self.start_audio(index).await?;
                 }
                 self.save()?;
                 save = true;
@@ -447,8 +704,13 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
     });
 
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut timer = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
+            Some((generation,event))=engine.events.recv()=>{engine.native_event(generation,event).await;state_tx.send_replace(engine.status());}
+            _=timer.tick()=>{
+                if engine.sleep_until.is_some_and(|until|Instant::now()>=until){engine.sleep_until=None;let _=engine.audio_control(Control::Pause(true)).await;engine.message="Sleep timer paused playback".into();}
+            }
             Some(e)=rx.recv()=>{
                 let r=engine.handle(e.request).await;
                 if let Err(ref error)=r {engine.message=error.to_string();}
@@ -461,6 +723,9 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
         }
     }
     drop(state_tx);
+    if let Some(audio) = engine.audio.take() {
+        audio.stop().await;
+    }
     let _ = quit_accept.send(());
     let _ = accept.await;
 
@@ -495,6 +760,65 @@ mod tests {
         }
         e.queue.current = Some(0);
         (d, e)
+    }
+    #[tokio::test]
+    async fn native_events_require_the_current_worker_and_audio_progress() {
+        let (_dir, mut engine) = engine();
+        engine
+            .native_event(
+                99,
+                crate::backend::worker::Event::Ready {
+                    duration: 359.0,
+                    sample_rate: 44100,
+                    channels: 2,
+                },
+            )
+            .await;
+        assert!(!engine.playback.authorized);
+        engine
+            .native_event(
+                0,
+                crate::backend::worker::Event::Ready {
+                    duration: 359.0,
+                    sample_rate: 44100,
+                    channels: 2,
+                },
+            )
+            .await;
+        assert!(engine.playback.authorized);
+        assert!(!engine.playback.playing);
+        engine
+            .native_event(
+                0,
+                crate::backend::worker::Event::State {
+                    playing: true,
+                    position: 1.0,
+                    encrypted_packets: 45,
+                    decoded_frames: 45,
+                    nonzero_samples: 1000,
+                },
+            )
+            .await;
+        assert!(engine.playback.playing);
+        assert_eq!(engine.playback.position, 1.0);
+    }
+    #[tokio::test]
+    async fn stale_queue_play_cannot_start_a_different_song() {
+        let (_dir, mut engine) = engine();
+        let revision = engine.queue.revision;
+        for (expected, id) in [(revision - 1, "a"), (revision, "b")] {
+            let error = engine
+                .handle(Request::PlayQueued {
+                    revision: expected,
+                    index: 0,
+                    id: id.into(),
+                })
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("Queue changed"), "{error}");
+            assert_eq!(engine.queue.current, Some(0));
+        }
     }
     #[tokio::test]
     async fn failed_next_does_not_change_current_selection() {

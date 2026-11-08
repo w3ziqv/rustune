@@ -1,0 +1,15 @@
+[package]
+name = "cdm-host"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Pinned source-built native CDM ABI dependency for Rustune"
+
+[features]
+default = []
+
+[dependencies]
+anyhow = "1"
+
+[build-dependencies]
+cc = "1"

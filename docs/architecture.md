@@ -19,11 +19,28 @@ has strict host/decode bounds. Lyrics distinguish missing, instrumental, plain,
 synced, throttled and error states. Silent queue previews do not borrow the clock
 of an unrelated playing track. Rendering constructs visible rows only.
 
-The native playback engine is absent. Playback requests return a clear
-capability error without changing the queue. No DRM bypass, fabricated stream or
-preview playback is used. Source quality remains unknown. Future native playback
-requires a genuine authorized engine and live complete-song verification before
-a release tag.
+Native playback runs in an owned child of the same executable, using inherited
+private command/event pipes. Only public song IDs and bounded controls cross
+those pipes. The worker reads the private user token itself and retrieves the
+public application authorization anonymously from allowlisted Apple HTTPS
+origins. Authenticated playback/license requests never follow redirects and
+credentials are never sent to artwork, lyrics or media CDN hosts.
+
+A source-built pinned third-party CDM host drives an installed Widevine module
+through its published ABI; no content keys are extracted. One thread owns one
+CDM per worker process. Monotonic deadlines drive CDM callbacks; renewed license
+requirements stop playback with an explicit error. FFmpeg demuxes encrypted AAC
+packets and exposes bounded CENC metadata; the CDM decrypts those samples, then
+native AAC decoding and bounded PCM conversion feed ALSA/PipeWire. Decrypted
+audio remains in memory. The converter drains its tail and resets after seeking.
+
+ALSA's submitted/queued frame counts provide the playback clock. EOF alone does
+not establish completion: decoder errors abort, and the submitted end position
+must match the full manifest duration. After the real output ring empties, the
+worker exits and is reaped before queue advancement. Pause/seek remain active
+during final draining. Active transport stays controllable after local logout.
+Source codec/rate/channels are decoder fields; target bitrate is explicitly
+reported, and source bit depth/lossless support remain unknown/unavailable.
 
 Public catalog metadata is separate from the playback capability. A bounded
 Apple Search/Lookup client runs in IPC client tasks, so a slow metadata request
@@ -36,4 +53,4 @@ Keyboard menus keep separate navigation, content and player-control focus. Song
 actions freeze the selected record; fresh queries invalidate old rows/cursors,
 and a bounded back stack restores public browsing. Returning to Queue refetches
 rows; queue-page revisions and checked identity/revision edits prevent stale
-indices from removing/moving a different track after an external change.
+indices from playing/removing/moving a different track after an external change.

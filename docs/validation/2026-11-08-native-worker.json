@@ -1,0 +1,387 @@
+{
+  "worker_pid": 204458,
+  "elapsed_seconds": 364.2187693140004,
+  "events": [
+    {
+      "event": "ready",
+      "data": {
+        "duration": 359.7278699999998,
+        "sample_rate": 44100,
+        "channels": 2
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 10.209501133786848,
+        "encrypted_packets": 444,
+        "decoded_frames": 444,
+        "nonzero_samples": 902749
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 20.42498866213152,
+        "encrypted_packets": 884,
+        "decoded_frames": 884,
+        "nonzero_samples": 1803567
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 30.641632653061226,
+        "encrypted_packets": 1324,
+        "decoded_frames": 1324,
+        "nonzero_samples": 2704349
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 40.85705215419501,
+        "encrypted_packets": 1764,
+        "decoded_frames": 1764,
+        "nonzero_samples": 3605102
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 51.07430839002267,
+        "encrypted_packets": 2204,
+        "decoded_frames": 2204,
+        "nonzero_samples": 4505840
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 61.29079365079365,
+        "encrypted_packets": 2644,
+        "decoded_frames": 2644,
+        "nonzero_samples": 5406612
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 71.51083900226757,
+        "encrypted_packets": 3084,
+        "decoded_frames": 3084,
+        "nonzero_samples": 6307445
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 81.72818594104308,
+        "encrypted_packets": 3524,
+        "decoded_frames": 3524,
+        "nonzero_samples": 7208324
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 91.94337868480726,
+        "encrypted_packets": 3964,
+        "decoded_frames": 3964,
+        "nonzero_samples": 8109087
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 102.15816326530613,
+        "encrypted_packets": 4404,
+        "decoded_frames": 4404,
+        "nonzero_samples": 9009883
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 112.37768707482994,
+        "encrypted_packets": 4844,
+        "decoded_frames": 4844,
+        "nonzero_samples": 9910678
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 122.59172335600907,
+        "encrypted_packets": 5284,
+        "decoded_frames": 5284,
+        "nonzero_samples": 10811583
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 132.8075283446712,
+        "encrypted_packets": 5724,
+        "decoded_frames": 5724,
+        "nonzero_samples": 11712443
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 143.02603174603175,
+        "encrypted_packets": 6164,
+        "decoded_frames": 6164,
+        "nonzero_samples": 12613293
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 153.24408163265306,
+        "encrypted_packets": 6604,
+        "decoded_frames": 6604,
+        "nonzero_samples": 13513929
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 163.45873015873016,
+        "encrypted_packets": 7044,
+        "decoded_frames": 7044,
+        "nonzero_samples": 14414615
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 173.6804081632653,
+        "encrypted_packets": 7484,
+        "decoded_frames": 7484,
+        "nonzero_samples": 15315272
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 183.89308390022677,
+        "encrypted_packets": 7924,
+        "decoded_frames": 7924,
+        "nonzero_samples": 16216040
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 194.107641723356,
+        "encrypted_packets": 8364,
+        "decoded_frames": 8364,
+        "nonzero_samples": 17116895
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 204.32607709750567,
+        "encrypted_packets": 8804,
+        "decoded_frames": 8804,
+        "nonzero_samples": 18017763
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 214.5457142857143,
+        "encrypted_packets": 9244,
+        "decoded_frames": 9244,
+        "nonzero_samples": 18918634
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 224.75891156462586,
+        "encrypted_packets": 9684,
+        "decoded_frames": 9684,
+        "nonzero_samples": 19819504
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 234.97836734693877,
+        "encrypted_packets": 10124,
+        "decoded_frames": 10124,
+        "nonzero_samples": 20720359
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 245.1934693877551,
+        "encrypted_packets": 10564,
+        "decoded_frames": 10564,
+        "nonzero_samples": 21621207
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 255.41333333333333,
+        "encrypted_packets": 11004,
+        "decoded_frames": 11004,
+        "nonzero_samples": 22522047
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 265.6283900226757,
+        "encrypted_packets": 11444,
+        "decoded_frames": 11444,
+        "nonzero_samples": 23422860
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 275.8432653061225,
+        "encrypted_packets": 11884,
+        "decoded_frames": 11884,
+        "nonzero_samples": 24323583
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 286.0628798185941,
+        "encrypted_packets": 12324,
+        "decoded_frames": 12324,
+        "nonzero_samples": 25224258
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 296.2790249433107,
+        "encrypted_packets": 12764,
+        "decoded_frames": 12764,
+        "nonzero_samples": 26124971
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 306.4914058956916,
+        "encrypted_packets": 13204,
+        "decoded_frames": 13204,
+        "nonzero_samples": 27025801
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 316.7138095238095,
+        "encrypted_packets": 13644,
+        "decoded_frames": 13644,
+        "nonzero_samples": 27926642
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 326.9291609977324,
+        "encrypted_packets": 14084,
+        "decoded_frames": 14084,
+        "nonzero_samples": 28827518
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 337.1462585034014,
+        "encrypted_packets": 14524,
+        "decoded_frames": 14524,
+        "nonzero_samples": 29728399
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 347.36086167800454,
+        "encrypted_packets": 14964,
+        "decoded_frames": 14964,
+        "nonzero_samples": 30628438
+      }
+    },
+    {
+      "event": "state",
+      "data": {
+        "playing": true,
+        "position": 357.578798185941,
+        "encrypted_packets": 15404,
+        "decoded_frames": 15404,
+        "nonzero_samples": 31495968
+      }
+    },
+    {
+      "event": "ended",
+      "data": {
+        "position": 359.7467573696145,
+        "encrypted_packets": 15493,
+        "decoded_frames": 15493,
+        "nonzero_samples": 31517516
+      }
+    }
+  ],
+  "last_event": {
+    "event": "ended",
+    "data": {
+      "position": 359.7467573696145,
+      "encrypted_packets": 15493,
+      "decoded_frames": 15493,
+      "nonzero_samples": 31517516
+    }
+  },
+  "peak_worker_rss_kib": 159548,
+  "peak_worker_pss_kib": 135648,
+  "worker_cpu_ticks": 914,
+  "owned_browser_processes": 0,
+  "exit_code": 0
+}

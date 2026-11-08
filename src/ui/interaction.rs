@@ -21,17 +21,13 @@ impl SongActions {
         if self.queue_index.is_some() {
             &[
                 "Lyrics and cover",
-                "Play (audio unavailable)",
+                "Play",
                 "Remove from queue",
                 "Move up",
                 "Move down",
             ]
         } else {
-            &[
-                "Lyrics and cover",
-                "Add to queue",
-                "Play (audio unavailable)",
-            ]
+            &["Lyrics and cover", "Add to queue", "Play"]
         }
     }
 }
@@ -131,7 +127,11 @@ impl App {
                     return (
                         false,
                         match menu.selected {
-                            1 => Some(Request::PlayIndex(index)),
+                            1 => Some(Request::PlayQueued {
+                                revision: menu.revision,
+                                index,
+                                id: menu.track.id,
+                            }),
                             2 => Some(Request::QueueEdit {
                                 revision: menu.revision,
                                 index,
@@ -197,7 +197,9 @@ impl App {
         vec![
             format!(
                 "Music User Token: {} · Enter to edit",
-                if self.token_stored {
+                if status.is_some_and(|s| s.playback.authorized) {
+                    "Apple playback authorized"
+                } else if self.token_stored {
                     "saved locally, unverified"
                 } else {
                     "not saved"
@@ -368,6 +370,6 @@ impl App {
             ),
             actions,
         );
-        f.render_widget(Paragraph::new("↑/↓ choose · Enter confirm · Esc back\nPublic Apple catalog; account acceptance unverified"),hint);
+        f.render_widget(Paragraph::new("↑/↓ choose · Enter confirm · Esc back\nPlay uses your saved token and the native CDM"),hint);
     }
 }

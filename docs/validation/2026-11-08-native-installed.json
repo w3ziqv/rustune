@@ -1,0 +1,15 @@
+{
+  "installed_binary_sha256": "ff318486f2e20c807035bd0d96775e5c29b3747e8a55a2ce86d59266c3043c28",
+  "release_matches_installed": true,
+  "service_pid": 233493,
+  "backend": "Native CDM / AAC / ALSA",
+  "native_start_available": true,
+  "owned_browser_pid": null,
+  "queue_length": 11,
+  "user_files_preserved": {
+    "music-user-token": true,
+    "token_inode_and_mtime": true,
+    "state.json": true,
+    "config.toml": true
+  }
+}
