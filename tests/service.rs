@@ -95,7 +95,19 @@ async fn real_service_persists_queue_pushes_updates_and_obeys_mpris() {
     ] {
         ipc::request(&paths, &request).await.unwrap();
     }
-    let updated = Config::load(&paths).unwrap();
+    // IPC acknowledges the in-memory update; persistence runs independently.
+    // Wait for the actual disk result instead of racing the config writer.
+    let updated = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let saved = Config::load(&paths).unwrap();
+            if !saved.artwork && !saved.lyrics && saved.catalog_country == "US" {
+                break saved;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("config writer must persist all accepted settings");
     assert!(!updated.artwork && !updated.lyrics);
     assert_eq!(updated.catalog_country, "US");
     assert_eq!(

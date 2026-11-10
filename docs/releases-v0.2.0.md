@@ -22,6 +22,7 @@ Widevine CDM are not distributed.
   Ambiguous outcomes block automatic retries to avoid accidental duplicate writes.
 - Independent metadata, queue and transport handling; shared service/IPC/MPRIS
   state and controlled-worker integration tests.
+- Make the service integration test wait for asynchronous configuration persistence.
 - Fix real artwork colors when NO_COLOR is inherited by Kitty/other terminals.
 
 ## Validation and limits
