@@ -28,37 +28,37 @@
 
 ### Task 1: Lightweight audio boundary and RAM
 
-**Files:** Cargo.toml; crates/audio-protocol/{Cargo.toml,src/lib.rs,src/paths.rs}; audio/{Cargo.toml,src/main.rs,src/worker.rs,src/apple.rs,src/cenc.rs,src/pcm.rs}; src/backend/{controller,worker,mod}.rs; src/config.rs; scripts/build-slim-audio.sh.
+**Files:** Cargo.toml; crates/core/{Cargo.toml,src/lib.rs,src/paths.rs}; audio/{Cargo.toml,src/main.rs,src/worker.rs,src/apple.rs,src/cenc.rs,src/pcm.rs}; src/backend/{controller,worker,mod}.rs; src/config.rs; scripts/build-slim-audio.sh.
 **Interfaces:** Shared Control/Event/Paths/private_write; Controller resolves a sibling rustune-audio executable and owns its private pipes/lifecycle. Standard workspace builds use system FFmpeg; optional slim-ffmpeg feature links a minimal private build.
-- [ ] RED: helper resolution/missing helper and bounded protocol validation tests.
-- [ ] Move existing tested native code behind shared lightweight interfaces; remove FFmpeg/CDM/ALSA from UI dependency graph.
-- [ ] GREEN: workspace tests and actual encrypted stream controls. Build pinned minimal FFmpeg outside source tree, keep TLS verified.
-- [ ] Compare same-song/interval/process RSS/PSS/CPU against preserved baseline binary; retain covers.
-- [ ] Commit locally after checks.
+- [x] RED: helper resolution/missing helper and bounded protocol validation tests.
+- [x] Move existing tested native code behind shared lightweight interfaces; remove FFmpeg/CDM/ALSA from UI dependency graph.
+- [x] GREEN: workspace tests and actual encrypted stream controls. Build pinned minimal FFmpeg outside source tree, keep TLS verified.
+- [x] Compare same-song/interval/process RSS/PSS/CPU against preserved baseline binary; retain covers.
+- [x] Commit locally after checks.
 
 ### Task 2: Real equalizer
 
-**Files:** crates/audio-protocol/src/equalizer.rs; audio/src/{equalizer,worker}.rs; src/{config,ipc,service,ui}.rs; src/ui/equalizer.rs; tests.
+**Files:** crates/core/src/equalizer.rs; audio/src/{equalizer,worker}.rs; src/{config,ipc,service,ui}.rs; src/ui/equalizer.rs; tests.
 **Interfaces:** EqSettings (enabled, preamp_db, bands_db[10]); Request/Control::Equalizer; worker acknowledgment; live source-rate aware stereo DSP.
-- [ ] RED: invalid gain/config/IPC, bit-exact bypass, measured 1kHz gain/cut, independent stereo, stable silence, runtime edits and reset on seek.
-- [ ] Implement bounded RBJ peaking biquads, output clipping protection/headroom, reused PCM buffer and honest state reporting.
-- [ ] Implement arrow-controlled sliders, bypass, Flat/Bass/Vocal/Treble presets and persistent settings.
-- [ ] GREEN: full workspace suite; real PTY edits plus native playback with EQ enabled, including pause/seek and track replacement.
-- [ ] Commit locally after checks.
+- [x] RED: invalid gain/config/IPC, bit-exact bypass, measured 1kHz gain/cut, independent stereo, stable silence, runtime edits and reset on seek.
+- [x] Implement bounded RBJ peaking biquads, output clipping protection/headroom, reused PCM buffer and honest state reporting.
+- [x] Implement arrow-controlled sliders, bypass, Flat/Bass/Vocal/Treble presets and persistent settings.
+- [x] GREEN: full workspace suite; real PTY edits plus native playback with EQ enabled, including pause/seek and track replacement.
+- [x] Commit locally after checks.
 
 ### Task 3: Search quality
 
 **Files:** src/catalog.rs; src/catalog/search.rs; tests/online scripts.
 **Interfaces:** Catalog::browse remains stable; query candidate retrieval/ranking is bounded and pages are cached as a stable ordered result set.
-- [ ] Reproduce exact A&W/Lana Del Rey/Del Ray queries against real upstream endpoints without user credentials.
-- [ ] RED: punctuation and mixed title/artist, artist typo, ranking original vs unrelated covers, deduplication and stable pagination; no external cursors/auth leakage.
-- [ ] Implement general query normalization, bounded fallbacks and scoring without hardcoded artist/song aliases; keep country/explicit/version behavior visible.
-- [ ] GREEN: whole workspace suite and real online searches find the requested original in the first results.
-- [ ] Commit locally after checks.
+- [x] Reproduce exact A&W/Lana Del Rey/Del Ray queries against real upstream endpoints without user credentials.
+- [x] RED: punctuation and mixed title/artist, artist typo, ranking original vs unrelated covers, deduplication and stable pagination; no external cursors/auth leakage.
+- [x] Implement general query normalization, bounded fallbacks and scoring without hardcoded artist/song aliases; keep country/explicit/version behavior visible.
+- [x] GREEN: whole workspace suite and real online searches find the requested original in the first results.
+- [x] Commit locally after checks.
 
 ### Final verification and installation
 
-- [ ] Fresh independent whole-change code review; fix substantive findings with regressions.
-- [ ] cargo fmt --all -- --check; cargo clippy --all-targets -- -D warnings; cargo test; cargo build --release.
-- [ ] Installed keyboard/search/EQ/native audio tests and full-song playback; document measured RAM rather than forecast savings.
-- [ ] Install both executables atomically, preserve private user files and avoid interrupting active playback. No GitHub publication.
+- [x] Fresh independent whole-change code review; fix substantive findings with regressions.
+- [x] cargo fmt --all -- --check; cargo clippy --all-targets -- -D warnings; cargo test; cargo build --release.
+- [x] Installed keyboard/search/EQ/native audio tests and full-song playback; document measured RAM rather than forecast savings.
+- [x] Install both executables atomically, preserve private user files and avoid interrupting active playback. No GitHub publication.

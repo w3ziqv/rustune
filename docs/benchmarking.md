@@ -9,12 +9,13 @@ all three owned processes (TUI, service, audio/CDM helper) are summed. Browsers:
 
 | Measurement | Before | After |
 |---|---:|---:|
-| Peak PSS | 137.32 MiB | 109.81 MiB |
-| Peak summed RSS | 234.27 MiB | 132.14 MiB |
-| Mean PSS | 137.22 MiB | 109.78 MiB |
-| CPU, one core | 2.78% | 2.44% |
+| Peak PSS | 141.23 MiB | 110.46 MiB |
+| Peak summed RSS | 234.45 MiB | 132.26 MiB |
+| Mean PSS | 141.18 MiB | 110.41 MiB |
+| CPU, one core | 2.78% | 2.00% |
 
-Peak PSS fell by 27.51 MiB (20.04%). Summed RSS counts shared mappings multiple
+Peak PSS fell by 30.78 MiB (21.79%). A prior paired run measured a20.04%
+reduction; CDM/allocator working sets vary between runs. Summed RSS counts shared mappings multiple
 times; PSS is the better comparison for total physical memory. CPU differences
 in this short sample are not established speedups. The CDM remains included.
 The paired samples verify genuine encrypted playback, not a complete song.

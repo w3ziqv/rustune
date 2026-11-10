@@ -28,8 +28,15 @@ navigation, public searches, lyrics/artwork, themes, queue and masked login. The
 do not prove account acceptance or audio; genuine playback evidence is separate.
 
 Paired30s real EQ-off playback samples including all three processes showed
-PSS137.32→109.81 MiB (−20.04%). See [measurements](benchmarking.md). No pushes,
+PSS141.23→110.46 MiB (−21.79%; prior run −20.04%). See [measurements](benchmarking.md). No pushes,
 PRs, tags, releases, supplied credentials or proprietary CDM binaries were published.
+
+The [installed pair](validation/2026-11-10-eq-search-installed.json) matches the
+verified release hashes. The real user token (inode/mtime/mode/content), configuration
+bytes and all39 queue records were preserved. Existing audio was inactive at
+installation, and no playback was started. The new real service separately
+accepted account-region search for the typo query and private-library listing.
+Reopen an already-running older TUI to load the new interface.
 
 ## Native subscribed playback verified — earlier revision
 

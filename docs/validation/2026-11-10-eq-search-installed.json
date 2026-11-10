@@ -1,0 +1,21 @@
+{
+  "installed_date": "2026-11-10",
+  "binary_sha256": "0c003a0ec08c1d2e5fcb92739ee14a688ac9f423e814ba26a94579ec3ad4a8c2",
+  "audio_helper_sha256": "e7857e9ad54b5c1a9614a3c98b49367574d268618df1054f7c0913dd338449bd",
+  "matches_verified_candidate": true,
+  "token_file_and_identity_preserved": true,
+  "config_bytes_preserved": true,
+  "queue_preserved": true,
+  "queue_len": 39,
+  "paused_position_restored": false,
+  "had_paused_audio": false,
+  "playing_after_install": false,
+  "owned_browser_processes": 0,
+  "installed_service_smoke": {
+    "installed_native_prerequisites_available": true,
+    "installed_typo_search_finds_original": true,
+    "installed_search_uses_account_region": true,
+    "installed_private_library_accepted": true,
+    "queue_length_unchanged": true
+  }
+}

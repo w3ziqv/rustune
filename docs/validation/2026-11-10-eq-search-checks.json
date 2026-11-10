@@ -1,0 +1,11 @@
+{
+  "tests_passed": 105,
+  "tests_failed": 0,
+  "opt_in_tests_ignored": 3,
+  "clippy_passed": true,
+  "release_passed": true,
+  "slim_release_passed": true,
+  "supplied_credential_matches_in_repository": false,
+  "installed_pair_matches_release": true,
+  "live_native_controls_passed": 67
+}
