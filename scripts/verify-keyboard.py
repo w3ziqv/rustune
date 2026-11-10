@@ -104,7 +104,7 @@ with tempfile.TemporaryDirectory(prefix='rustune-keyboard-') as directory:
         send(b'\x1b[B\r');wait(lambda:'artwork = false' in config.read_text(),'Enter toggles artwork')
         send(b'\x1b[B\r');wait(lambda:'lyrics = false' in config.read_text(),'Enter toggles lyrics')
         send(b'\x1b[B\r');wait(lambda:status()['catalog_country']=='US','Enter changes catalog country')
-        menu(3);wait(lambda:'PERSONAL ACCOUNT' in text() and 'not implemented' in text(),'private library states authorization limit separately')
+        menu(3);wait(lambda:'MY LIBRARY' in text() and 'accepted Music User Token' in text(),'private library explains accepted account token requirement')
         menu(11);send(b'\r');wait(lambda:'Paste token' in text(),'settings Enter opens token entry')
         artificial=b'artificial-keyboard-token';send(b'\x1b[200~'+artificial+b'\x1b[201~')
         check(artificial.decode() not in text() and '•••' in text(),'keyboard login paste stays masked')

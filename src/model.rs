@@ -68,6 +68,8 @@ impl Playback {
 pub struct Page {
     pub items: Vec<Track>,
     pub next: Option<String>,
+    #[serde(default)]
+    pub context: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

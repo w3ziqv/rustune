@@ -1,4 +1,5 @@
-//! Anonymous public Apple Search/Lookup metadata; no credential or preview transport.
+//! Apple Music catalog/account search with bounded anonymous iTunes fallback.
+mod apple;
 use crate::{
     artwork,
     cache::Cache,
@@ -22,6 +23,7 @@ struct State {
     blocked_until: Option<Instant>,
 }
 pub struct Catalog {
+    apple: Option<apple::AppleCatalog>,
     client: reqwest::Client,
     origin: String,
     state: Mutex<State>,
@@ -29,11 +31,14 @@ pub struct Catalog {
     entries: AtomicUsize,
 }
 impl Catalog {
-    pub fn new() -> Result<Self> {
-        Self::create("https://itunes.apple.com")
+    pub fn new(paths: &crate::config::Paths) -> Result<Self> {
+        let mut catalog = Self::create("https://itunes.apple.com")?;
+        catalog.apple = Some(apple::AppleCatalog::new(paths.clone())?);
+        Ok(catalog)
     }
     fn create(origin: &str) -> Result<Self> {
         Ok(Self {
+            apple: None,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(8))
                 .redirect(reqwest::redirect::Policy::none())
@@ -60,8 +65,15 @@ impl Catalog {
     }
     pub fn cache_entries(&self) -> usize {
         self.entries.load(Ordering::Relaxed)
+            + self
+                .apple
+                .as_ref()
+                .map_or(0, apple::AppleCatalog::cache_entries)
     }
     pub fn set_capacity(&self, capacity: usize) {
+        if let Some(apple) = &self.apple {
+            apple.set_capacity(capacity);
+        }
         let capacity = capacity.min(32);
         if self.capacity.swap(capacity, Ordering::Relaxed) != capacity
             && let Ok(mut state) = self.state.try_lock()
@@ -71,6 +83,31 @@ impl Catalog {
         }
     }
     pub async fn browse(
+        &self,
+        kind: &str,
+        term: &str,
+        next: Option<&str>,
+        country: &str,
+        limits: Limits,
+    ) -> Result<Page> {
+        if let Some(apple) = &self.apple {
+            let result = apple.browse(kind, term, next, country, limits).await;
+            if result.is_ok()
+                || matches!(
+                    kind,
+                    "library"
+                        | "search:library-songs"
+                        | "playlists"
+                        | "recent"
+                        | "search:playlists"
+                )
+            {
+                return result;
+            }
+        }
+        self.browse_itunes(kind, term, next, country, limits).await
+    }
+    async fn browse_itunes(
         &self,
         kind: &str,
         term: &str,
@@ -240,6 +277,10 @@ impl Catalog {
             .collect::<Vec<_>>();
         let more = items.len() > offset + size;
         let page = Page {
+            context: Some(format!(
+                "Apple/iTunes fallback · {}",
+                country.to_ascii_uppercase()
+            )),
             items: items.into_iter().skip(offset).take(size).collect(),
             next: more.then(|| (offset + size).to_string()),
         };

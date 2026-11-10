@@ -5,6 +5,7 @@ pub const MAX_FRAME: usize = 4 * 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "command", content = "args", rename_all = "snake_case")]
 pub enum Request {
+    Equalizer(rustune_core::equalizer::EqSettings),
     Status,
     Subscribe,
     QueuePage {

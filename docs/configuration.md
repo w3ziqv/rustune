@@ -49,10 +49,9 @@ Token privately. Backspace edits, Ctrl-U clears, Esc cancels, Enter saves.
 `:logout` / `rustune logout` removes only the local token. Local storage does not
 verify Apple account acceptance. No browser login or native messaging remains.
 
-The native playback engine is not implemented. Source quality remains unknown;
-transport, DSP and nonzero sleep timer requests report unavailability. Public
-catalog metadata works independently of token storage; personal-library and
-playlist authorization remain unavailable.
+Native playback requires the sibling rustune-audio helper, private token and
+compatible CDM. Source quality is unknown until the decoder reports it. Accepted
+account tokens enable Library and Search → My library; playlists remain unavailable.
 Queue edits do not auto-play music. The service publishes changes through private
 IPC; it does not poll a browser or keep an idle playback refresh timer.
 
@@ -62,12 +61,29 @@ cover fetching. Both use song metadata rather than credentials.
 Keyboard navigation: ↑/↓ selects, Enter/→ opens/confirms, ← returns from album
 tracks or a lyrics preview to previous results, Esc opens navigation. Tab cycles
 focus; player buttons use ←/→ and Enter. Search opens a typing field; Tab/F2
-changes songs/albums/artists. PgUp/PgDn changes pages (public queries cap at 200
+changes songs/albums/artists/My library. PgUp/PgDn changes pages (public queries cap at 200
 results). Settings exposes token entry/removal, themes, resource profiles,
 artwork, lyrics, public catalog country, queue shuffle/repeat, Help and Quit.
 
 `catalog_country` is a two-letter storefront code, normalized to uppercase.
-Public requests use fixed HTTPS Apple Search/Lookup endpoints, no redirects or
-credentials, bounded 512 KiB responses, at most 200 records, eight-second request
-timeouts and a 20-per-minute request budget. Cached requests avoid network calls;
+Public requests use fixed HTTPS Apple Music catalog endpoints, anonymous
+application authorization, no user token and no redirects, bounded 2 MiB
+responses, at most 200 results, eight-second request timeouts and a 20-per-minute
+request budget. Account region from me/storefront overrides this fallback country.
+Private library requests send the token only to fixed Apple account endpoints.
+The iTunes metadata fallback has a 512 KiB bound. Cached requests avoid network calls;
 HTTP Retry-After is honored. A store link accompanies public result metadata.
+
+```toml
+[equalizer]
+enabled = false
+preamp_db = 0.0
+bands_db = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+```
+
+Bands are 31 Hz, 63 Hz, 125 Hz, 250 Hz, 500 Hz, 1 kHz, 2 kHz, 4 kHz,
+8 kHz and 16 kHz. All gains/preamp accept finite −12…+12 dB. Press `e`: ↑/↓
+selects, ←/→ edits by 0.5 dB or cycles presets, Enter toggles/resets a row,
+`b` bypasses and `r` restores Flat. Edits persist. Automatic headroom can lower
+overall level for boosted bands; the UI reports the applied value. Bypass
+preserves configured gains and source quality fields never change with EQ.

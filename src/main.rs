@@ -245,17 +245,17 @@ async fn doctor(config: &Config, paths: &Paths) -> Result<()> {
     println!(
         "Native playback: CDM → AAC → ALSA; {}",
         if rustune::backend::worker::available(paths) {
-            "token and CDM files present; live authorization is checked on Play"
+            "token, CDM and audio helper present; live authorization is checked on Play"
         } else {
-            "save a token and install a compatible CDM at ~/.cache/rustune/drm/libwidevinecdm.so"
+            "save a token, install sibling rustune-audio and a compatible CDM at ~/.cache/rustune/drm/libwidevinecdm.so"
         }
     );
     println!("Audio source quality: unknown");
     println!(
-        "Public catalog: Apple Search/Lookup metadata, country {} (no token required)",
+        "Public catalog: Apple Music metadata, fallback country {} (account region when verified)",
         config.catalog_country
     );
-    println!("Personal library/playlists: account authorization not implemented");
+    println!("Personal library: verified Music User Token required; playlists unavailable");
     println!("Lyrics: free LRCLIB; Artwork: public Apple cover URLs");
     println!("XDG runtime: {}", paths.runtime.display());
     println!(

@@ -8,8 +8,8 @@ centered lyrics, progress and mouse/keyboard controls.
 Native playback uses your saved Media User Token, anonymous public Apple
 application authorization, a locally installed Widevine CDM, native AAC decoding
 and ALSA/PipeWire audio. No content keys are extracted. Apple subscription and
-license requirements remain enforced. Personal library/playlists authorization
-is still unavailable. A subscribed complete song has been verified through the
+license requirements remain enforced. Private song-library listing and search use your accepted Media User Token;
+playlist browsing remains unavailable. A subscribed complete song has been verified through the
 native service and TUI; see [live validation](docs/validation.md). No release tag
 is published, and the native playback work remains local.
 
@@ -25,10 +25,16 @@ headers, ALSA development headers, D-Bus, and a UTF-8 terminal:
 ```sh
 cargo build --release
 install -Dm755 target/release/rustune ~/.local/bin/rustune
+install -Dm755 target/release/rustune-audio ~/.local/bin/rustune-audio
 rustune init
 rustune login
 rustune
 ```
+
+For the smaller audio build, run `scripts/build-slim-audio.sh` after the normal
+build, then install both executables. It builds checksum-pinned minimal FFmpeg
+privately and preserves verified HTTPS; system libraries are unchanged. Standard
+builds use system FFmpeg. The two executables must remain beside each other.
 
 Install a compatible signed `libwidevinecdm.so` privately at
 `~/.cache/rustune/drm/libwidevinecdm.so` (directory 0700, file 0600). The proprietary
@@ -47,10 +53,12 @@ valid preferences, queue data and token files are preserved.
 
 ## Available features
 
-- Official anonymous Apple/iTunes catalog search for songs, albums and artists,
-  album tracks and artist albums. It works before or after local token storage;
-  it does not establish Apple Music subscription availability. Country defaults
-  to PL and can be changed in Settings. Store links are shown with result metadata.
+- Apple Music catalog search for songs, albums and artists, album tracks and
+  artist albums, with bounded ranking for combined title/artist queries. An
+  accepted user token selects your account region and enables Library and
+  Search → My library. Without one, public search uses the configured country
+  (PL by default). Public catalog requests do not include your user token.
+  An explicitly labeled iTunes fallback is used if the Music catalog fails.
 
 - Persistent bounded queue: select, add, remove, reorder, repeat/shuffle state,
   pagination and updates from other clients.
@@ -65,7 +73,9 @@ valid preferences, queue data and token files are preserved.
 LRCLIB receives only song title, artist, album and duration. Coverage varies;
 missing lyrics are reported honestly. No Apple credentials are sent to LRCLIB
 or artwork hosts. No generated artwork or invented audio quality is substituted.
-EQ, visualizer, crossfade, gapless guarantees and lossless playback are unavailable.
+A real ten-band stereo equalizer provides preamp, Flat/Bass/Vocal/Treble presets,
+click-smoothed live edits and automatic boost headroom. Bypass preserves the gains.
+Visualizer, crossfade, gapless guarantees and lossless playback are unavailable.
 
 ## Controls
 
@@ -80,6 +90,7 @@ EQ, visualizer, crossfade, gapless guarantees and lossless playback are unavaila
 | Tab | Cycle menu, content and player-button focus; change search type while typing |
 | PgUp / PgDn | Previous / next result or queue page |
 | Alt-← / Alt-→ | Seek when a playback engine is available |
+| `e` | Equalizer: ↑/↓ select, ←/→ edit, `b` bypass, `r` Flat |
 | `l` / `R` | Preview selected song lyrics / reload |
 | `J` / `K`, Delete | Reorder / remove queue item |
 | `:theme monochrome` / `:theme tokyo_night` | Change theme |
@@ -112,6 +123,8 @@ or live audio. See [validation](docs/validation.md), [configuration](docs/config
 [architecture](docs/architecture.md) and [measurements](docs/benchmarking.md).
 MIT licensed.
 
-The public metadata endpoint is the official [Apple iTunes Search API](https://performance-partners.apple.com/search-api).
-It receives search terms and country, never Music User Tokens. Previews are not
-played. Private Apple Music account data is not substituted with public results.
+Public metadata uses Apple Music catalog endpoints with anonymous application
+authorization, plus the [iTunes Search API](https://performance-partners.apple.com/search-api)
+as a fallback. Only fixed Apple account endpoints receive your private user token.
+Private-library errors remain explicit; public results never substitute for your library.
+Previews are not played.

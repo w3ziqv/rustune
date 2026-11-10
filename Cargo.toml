@@ -10,10 +10,7 @@ keywords = ["apple-music", "tui", "linux", "music", "ratatui"]
 categories = ["command-line-utilities", "multimedia::audio"]
 
 [dependencies]
-alsa = "0.12.1"
-base64 = "0.23.1"
-cdm-host = { path = "vendor/cdm-host" }
-ffmpeg-next = { version = "9.0.0", default-features = false, features = ["format", "codec", "software-resampling"] }
+rustune-core = { path = "crates/core" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"
@@ -35,6 +32,7 @@ zeroize = "1.9.1"
 unicode-width = "0.2.3"
 
 [dev-dependencies]
+base64 = "0.23.1"
 tempfile = "3"
 
 [profile.release]
@@ -52,3 +50,9 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 all = "warn"
+
+[workspace]
+members = ["crates/core", "audio"]
+default-members = [".", "crates/core", "audio"]
+exclude = ["vendor/cdm-host"]
+resolver = "3"

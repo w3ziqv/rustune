@@ -62,7 +62,7 @@ with tempfile.TemporaryDirectory(prefix='rustune-functional-') as directory:
         check(rpc('volume',.2)['ok'] and abs(status()['playback']['volume']-.2)<.001,'volume is configurable before a native engine is installed')
         check(rpc('mute')['ok'] and status()['playback']['volume']==0,'mute updates local volume before playback')
         check(rpc('mute')['ok'] and abs(status()['playback']['volume']-.2)<.001,'unmute restores configured local volume')
-        result=rpc('browse',{'kind':'library','term':'','next':None});check(not result['ok'] and 'Personal library' in result['error'],'personal authorization limitation is distinct from audio availability')
+        result=rpc('browse',{'kind':'library','term':'','next':None});check(not result['ok'] and 'accepted Music User Token' in result['error'],'invalid artificial token cannot read private library')
         check(status()['current']==0 and status()['queue_len']==3,'failed playback controls preserve queue')
         prop=subprocess.check_output(['busctl',f'--address={env["DBUS_SESSION_BUS_ADDRESS"]}','get-property','org.mpris.MediaPlayer2.rustune','/org/mpris/MediaPlayer2','org.mpris.MediaPlayer2.Player','CanControl'],env=env)
         check(prop.strip()==b'b false','MPRIS reports unavailable playback honestly')

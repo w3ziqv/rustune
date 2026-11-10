@@ -1,22 +1,16 @@
 //! Anonymous application authorization and private user authorization for native playback.
-use crate::config::{Paths, private_write};
+use crate::config::Paths;
 use anyhow::{Result, anyhow, ensure};
-use base64::{
-    Engine,
-    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
-};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use reqwest::{
     Client, Url,
     header::{HeaderMap, HeaderValue},
 };
+use rustune_core::public_apple::{application_token, bounded, read_private_secret};
+#[cfg(test)]
+use rustune_core::public_apple::{public_redirect, valid_public_token};
 use serde_json::{Value, json};
-use std::{
-    fs,
-    io::Read,
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
-    path::Path,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::time::Duration;
 use zeroize::Zeroizing;
 
 pub struct Manifest {
@@ -36,44 +30,6 @@ pub fn trusted_media(url: &Url) -> bool {
                 || h.ends_with(".mzstatic.com")
                 || h == "music.apple.com"
         })
-}
-fn public_redirect(base: &Url, location: &str) -> Result<Url> {
-    let url = base
-        .join(location)
-        .map_err(|_| anyhow!("Invalid public Apple redirect"))?;
-    ensure!(
-        url.scheme() == "https"
-            && url.username().is_empty()
-            && url.password().is_none()
-            && url.port().is_none()
-            && url.fragment().is_none()
-            && matches!(
-                url.host_str(),
-                Some("music.apple.com" | "js-cdn.music.apple.com")
-            ),
-        "Public Apple redirect left the trusted HTTPS origin"
-    );
-    Ok(url)
-}
-async fn anonymous_get(client: &Client, mut url: Url, max: usize) -> Result<Zeroizing<Vec<u8>>> {
-    for _ in 0..5 {
-        let response = client
-            .get(url.clone())
-            .send()
-            .await
-            .map_err(|_| anyhow!("Cannot retrieve public Apple application metadata"))?;
-        if response.status().is_redirection() {
-            let location = response
-                .headers()
-                .get(reqwest::header::LOCATION)
-                .and_then(|h| h.to_str().ok())
-                .ok_or_else(|| anyhow!("Missing public Apple redirect destination"))?;
-            url = public_redirect(&url, location)?;
-        } else {
-            return bounded(response, max).await;
-        }
-    }
-    Err(anyhow!("Too many public Apple application redirects"))
 }
 pub fn parse_manifest(base: &Url, text: &str) -> Result<Manifest> {
     ensure!(
@@ -142,130 +98,6 @@ pub fn parse_manifest(base: &Url, text: &str) -> Result<Manifest> {
         duration,
     })
 }
-pub fn valid_public_token(text: &str, now: u64) -> bool {
-    if text.len() > 16 * 1024 {
-        return false;
-    }
-    let parts = text.split('.').collect::<Vec<_>>();
-    if parts.len() != 3 {
-        return false;
-    }
-    let decode = |s: &str| {
-        URL_SAFE_NO_PAD
-            .decode(s)
-            .ok()
-            .and_then(|v| serde_json::from_slice::<Value>(&v).ok())
-    };
-    let (Some(header), Some(payload)) = (decode(parts[0]), decode(parts[1])) else {
-        return false;
-    };
-    header["alg"] == "ES256"
-        && header["kid"].as_str().is_some_and(|v| !v.is_empty())
-        && payload["iss"].as_str().is_some_and(|v| !v.is_empty())
-        && payload["exp"]
-            .as_u64()
-            .is_some_and(|expiry| expiry > now.saturating_add(60))
-}
-
-fn private_secret(path: &Path) -> Result<Zeroizing<String>> {
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(nix::libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|_| anyhow!("Private token file is unavailable; run rustune login"))?;
-    let m = file
-        .metadata()
-        .map_err(|_| anyhow!("Cannot inspect private token file"))?;
-    ensure!(
-        m.is_file()
-            && m.mode() & 0o077 == 0
-            && m.uid() == nix::unistd::Uid::current().as_raw()
-            && m.len() > 0
-            && m.len() <= 16384,
-        "Token file must be owned by you, mode 0600, and at most 16 KiB"
-    );
-    let mut text = Zeroizing::new(String::new());
-    file.by_ref()
-        .take(16385)
-        .read_to_string(&mut text)
-        .map_err(|_| anyhow!("Cannot read private token"))?;
-    ensure!(text.len() <= 16384, "Token file exceeds limit");
-    Ok(text)
-}
-async fn bounded(response: reqwest::Response, max: usize) -> Result<Zeroizing<Vec<u8>>> {
-    let mut response = response;
-    ensure!(
-        response.status().is_success(),
-        "Apple request rejected (HTTP {})",
-        response.status().as_u16()
-    );
-    let mut body = Zeroizing::new(Vec::new());
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| anyhow!("Apple response interrupted"))?
-    {
-        ensure!(
-            body.len().saturating_add(chunk.len()) <= max,
-            "Apple response exceeds limit"
-        );
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
-}
-async fn public_token(client: &Client, paths: &Paths) -> Result<Zeroizing<String>> {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let cache = paths.cache.join("apple-app-token");
-    if let Ok(token) = private_secret(&cache)
-        && valid_public_token(token.trim(), now)
-    {
-        return Ok(token);
-    }
-    let html = anonymous_get(
-        client,
-        Url::parse("https://music.apple.com/").expect("fixed public origin"),
-        4 * 1024 * 1024,
-    )
-    .await?;
-    let html =
-        std::str::from_utf8(&html).map_err(|_| anyhow!("Invalid public application metadata"))?;
-    let base = Url::parse("https://music.apple.com/").expect("fixed public origin");
-    for fragment in html.split("src=").skip(1).take(16) {
-        let Some(quote) = fragment.chars().next().filter(|c| matches!(c, '\'' | '"')) else {
-            continue;
-        };
-        let Some(path) = fragment[1..].split(quote).next() else {
-            continue;
-        };
-        let Ok(url) = public_redirect(&base, path) else {
-            continue;
-        };
-        if url.scheme() != "https"
-            || !url
-                .host_str()
-                .is_some_and(|h| h == "music.apple.com" || h == "js-cdn.music.apple.com")
-            || !url.path().ends_with(".js")
-        {
-            continue;
-        }
-        let script = anonymous_get(client, url, 8 * 1024 * 1024).await?;
-        for candidate in script.split(|b| !b.is_ascii_alphanumeric() && !b"._-".contains(b)) {
-            if !candidate.starts_with(b"eyJ") {
-                continue;
-            }
-            if let Ok(token) = std::str::from_utf8(candidate)
-                && valid_public_token(token, now)
-            {
-                private_write(&cache, token.as_bytes())?;
-                return Ok(Zeroizing::new(token.to_owned()));
-            }
-        }
-    }
-    Err(anyhow!(
-        "Public Apple application authorization was not found; the website may have changed"
-    ))
-}
-
 pub struct Session {
     client: Client,
     headers: HeaderMap,
@@ -278,8 +110,8 @@ impl Session {
             .user_agent("Rustune/0.1 native Linux audio")
             .build()
             .map_err(|_| anyhow!("Cannot initialize native HTTPS client"))?;
-        let user = private_secret(&paths.config.join("music-user-token"))?;
-        let app = public_token(&client, paths).await?;
+        let user = read_private_secret(&paths.config.join("music-user-token"))?;
+        let app = application_token(&client, paths).await?;
         let mut headers = HeaderMap::new();
         for (name, value) in [
             ("media-user-token", Zeroizing::new(user.trim().to_owned())),

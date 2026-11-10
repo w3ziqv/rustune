@@ -25,6 +25,18 @@ use tokio::{
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Status {
+    #[serde(default)]
+    pub equalizer: rustune_core::equalizer::EqSettings,
+    #[serde(default)]
+    pub equalizer_applied: Option<rustune_core::equalizer::EqSettings>,
+    #[serde(default)]
+    pub equalizer_headroom_db: f64,
+    #[serde(default)]
+    pub equalizer_samples: u64,
+    #[serde(default)]
+    pub equalizer_input_rms: f64,
+    #[serde(default)]
+    pub equalizer_output_rms: f64,
     pub playback: Playback,
     pub queue_len: usize,
     #[serde(default)]
@@ -104,6 +116,11 @@ pub async fn send(tx: &Sender, request: Request) -> Result<Value> {
 }
 
 struct Engine {
+    equalizer_applied: Option<rustune_core::equalizer::EqSettings>,
+    equalizer_headroom_db: f64,
+    equalizer_samples: u64,
+    equalizer_input_rms: f64,
+    equalizer_output_rms: f64,
     config: Config,
     paths: Paths,
     queue: Queue,
@@ -151,6 +168,13 @@ impl Engine {
             )
             .await?,
         );
+        self.equalizer_applied = None;
+        self.equalizer_samples = 0;
+        self.audio
+            .as_mut()
+            .expect("worker just started")
+            .send(Control::Equalizer(self.config.equalizer.clone()))
+            .await?;
         self.queue.current = Some(index);
         self.dismissed = None;
         self.playback = Playback {
@@ -180,6 +204,23 @@ impl Engine {
             return;
         }
         match event {
+            Event::EqualizerApplied {
+                settings,
+                headroom_db,
+            } => {
+                self.equalizer_applied = Some(settings);
+                self.equalizer_headroom_db = headroom_db;
+                self.equalizer_samples = 0;
+            }
+            Event::EqualizerStats {
+                samples,
+                input_rms,
+                output_rms,
+            } => {
+                self.equalizer_samples = samples;
+                self.equalizer_input_rms = input_rms;
+                self.equalizer_output_rms = output_rms;
+            }
             Event::Ready {
                 duration,
                 sample_rate,
@@ -270,7 +311,7 @@ impl Engine {
             .queue
             .current
             .filter(|i| *i < saved.queue.tracks.len());
-        let catalog = Arc::new(Catalog::new()?);
+        let catalog = Arc::new(Catalog::new(&paths)?);
         catalog.set_capacity(config.performance.limits().cache_entries);
         let playback = Playback {
             volume: config.volume,
@@ -279,6 +320,11 @@ impl Engine {
         let (event_tx, events) = mpsc::channel(32);
         let unmuted_volume = config.volume;
         Ok(Self {
+            equalizer_applied: None,
+            equalizer_headroom_db: 0.0,
+            equalizer_samples: 0,
+            equalizer_input_rms: 0.0,
+            equalizer_output_rms: 0.0,
             config,
             paths,
             queue: saved.queue,
@@ -299,6 +345,12 @@ impl Engine {
     }
     fn status(&self) -> Status {
         Status {
+            equalizer: self.config.equalizer.clone(),
+            equalizer_applied: self.equalizer_applied.clone(),
+            equalizer_headroom_db: self.equalizer_headroom_db,
+            equalizer_samples: self.equalizer_samples,
+            equalizer_input_rms: self.equalizer_input_rms,
+            equalizer_output_rms: self.equalizer_output_rms,
             playback: self.playback.clone(),
             queue_len: self.queue.tracks.len(),
             queue_revision: self.queue.revision,
@@ -336,6 +388,21 @@ impl Engine {
     async fn handle(&mut self, request: Request) -> Result<Value> {
         let mut save = false;
         match request {
+            Request::Equalizer(settings) => {
+                settings.validate()?;
+                if self.audio.is_some() {
+                    self.audio_control(Control::Equalizer(settings.clone()))
+                        .await?;
+                }
+                self.config.equalizer = settings;
+                self.config.save(&self.paths)?;
+                self.message = if self.audio.is_some() {
+                    "Applying equalizer to native audio…"
+                } else {
+                    "Equalizer saved; applies when playback starts"
+                }
+                .into();
+            }
             Request::PlayQueued {
                 revision,
                 index,

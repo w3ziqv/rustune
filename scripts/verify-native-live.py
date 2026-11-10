@@ -10,6 +10,7 @@ import pyte
 parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--live',action='store_true',required=True)
 parser.add_argument('--controls-only',action='store_true',help='Verify actual native controls without claiming complete-song playback')
+parser.add_argument('--eq-search',action='store_true',help='Verify account-aware Apple Music search, private library and native equalizer')
 parser.add_argument('binary');parser.add_argument('report')
 args=parser.parse_args();binary=str(Path(args.binary).resolve());report_file=Path(args.report).resolve()
 original_token=Path.home()/'.config/rustune/music-user-token'
@@ -103,6 +104,36 @@ with tempfile.TemporaryDirectory(prefix='rustune-native-live-') as directory:
         old_pid=status()['audio_pid'];rpc('next');wait(lambda:status()['current']==1 and active(),'Next starts another native worker')
         check(not Path(f'/proc/{old_pid}').exists(),'replaced native worker is reaped')
         rpc('previous');wait(lambda:status()['current']==0 and active(),'Previous starts the preceding queued song')
+        if args.eq_search:
+            for term in ['A&W','A&W lana del rey','A&W lana del ray']:
+                page=rpc('browse',{'kind':'search:songs','term':term,'next':None})
+                check(any(t['id']=='1655349125' and t['artist']=='Lana Del Rey' for t in page['items'][:5]),'real Apple Music search finds original: '+term)
+                check('account region' in page.get('context',''),'search uses region verified with the private user token')
+            for scope in ['search:songs','search:library-songs']:
+                empty=rpc('browse',{'kind':scope,'term':'zzqxwjk987654321notasong','next':None});check(not empty['items'] and empty['next'] is None,'real no-match search returns an empty page: '+scope)
+            library=rpc('browse',{'kind':'library','term':'','next':None});report['private_library_rows']=len(library['items']);check('My library' in library.get('context',''),'private user-token library listing is accepted')
+            private_search=rpc('browse',{'kind':'search:library-songs','term':'A&W','next':None});check('My library' in private_search.get('context',''),'private library search endpoint accepts the saved user token')
+            if library['items']:
+                first=library['items'][0];page=rpc('browse',{'kind':'search:library-songs','term':first['title'],'next':None})
+                check(any(t['id']==first['id'] for t in page['items']),'private library search finds an actual saved song without recording its metadata')
+            send(b'3');send(b'A&W lana del ray\r');wait(lambda:'A&W' in text() and 'Lana Del Rey' in text(),'actual TUI finds the combined typo query')
+            send(b'\r\x1b[B\x1b[B\r');wait(lambda:status()['playback'].get('track',{}).get('id')=='1655349125' and active(),'requested A&W result plays through the real native backend')
+            send(b'e');wait(lambda:'EQUALIZER' in text(),'keyboard opens real equalizer')
+            send(b'\r\x1b[B\x1b[C');wait(lambda:status()['equalizer']['enabled'] and status()['equalizer']['bands_db'][0]==6.0,'keyboard enables real Bass preset')
+            wait(lambda:status()['equalizer_samples']>4096 and status()['equalizer_headroom_db']<0,'native audio reports equalized samples and boost headroom')
+            send(b'\x1b[B\x1b[C\x1b[C');wait(lambda:status()['equalizer']['bands_db'][0]==7.0,'rapid arrow edits accumulate in native EQ settings')
+            cut={'enabled':True,'preamp_db':0.0,'bands_db':[-6.0]*10};rpc('equalizer',cut)
+            wait(lambda:status()['equalizer_applied']==cut and status()['equalizer_samples']>4096 and status()['equalizer_input_rms']>0 and status()['equalizer_output_rms']<status()['equalizer_input_rms']*.85,'real protected-song PCM is attenuated by the equalizer')
+            send(b'b');wait(lambda:not status()['equalizer']['enabled'] and status()['equalizer_applied']==status()['equalizer'],'keyboard bypass reaches native DSP')
+            check(status()['equalizer']['bands_db']==[-6.0]*10,'bypass preserves edited gains')
+            check('[equalizer]' in (config/'config.toml').read_text(),'equalizer settings persist privately in config')
+            for width,height in [(40,10),(20,4),(142,39)]:
+                fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack('HHHH',height,width,0,0));screen.resize(height,width);drain(.2);check(tui.poll() is None,f'live EQ resize {width}x{height}')
+            rpc('equalizer',{'enabled':True,'preamp_db':0.0,'bands_db':[-2,-2,-1,0,1,3,4,2,0,-1]})
+            rpc('pause');wait(lambda:not status()['playback']['playing'],'enabled equalizer accepts pause')
+            rpc('seek',10.0);wait(lambda:9.9<=status()['playback']['position']<11 and not status()['playback']['playing'],'enabled equalizer resets DSP on paused seek')
+            rpc('play');wait(lambda:active() and status()['equalizer_samples']>4096,'enabled equalizer resumes native PCM after seek')
+            report['equalizer_and_account_search_verified']=True;save()
         if args.controls_only:
             rpc('clear');duration=status()['playback']['duration'];rpc('seek',duration-.5);rpc('pause')
             wait(lambda:not status()['playback']['playing'],'pause is accepted near the end of the stream')
@@ -116,6 +147,7 @@ with tempfile.TemporaryDirectory(prefix='rustune-native-live-') as directory:
             report['controls_verified']=True;save();print(json.dumps({'controls_verified':True,'checks':len(report['checks']),'complete_song_verified':False}));sys.exit(0)
         rpc('clear');rpc('enqueue',{'track':track,'next':False,'play':True});wait(active,'complete-song test restarts at the beginning through the real service')
         check(status()['playback']['position']<3,'full-song verification begins at zero without seeking')
+        if args.eq_search:wait(lambda:status()['equalizer']['enabled'] and status()['equalizer_samples']>4096,'saved equalizer applies to the new complete-song worker')
         send(b'2')
         wait(lambda:'AAC' in text() and '44.1' in text(),'TUI displays decoder-reported AAC sample rate')
         wait(lambda:any('▀' in line for line in screen.display),'real cover renders during native playback',20)

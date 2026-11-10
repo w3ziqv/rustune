@@ -1,4 +1,5 @@
 //! Event-driven terminal client. Only visible rows are constructed.
+mod equalizer;
 mod interaction;
 #[cfg(test)]
 mod keyboard_tests;
@@ -101,6 +102,10 @@ enum Input {
     Command,
 }
 pub struct App {
+    eq_selected: usize,
+    eq_preset: usize,
+    eq_pending: Option<rustune_core::equalizer::EqSettings>,
+    eq_confirmed: rustune_core::equalizer::EqSettings,
     pub config: Config,
     pub status: Option<Status>,
     pub screen: usize,
@@ -118,6 +123,7 @@ pub struct App {
     input: Input,
     text: String,
     query: String,
+    catalog_context: String,
     kind: String,
     search_type: usize,
     note: String,
@@ -133,8 +139,21 @@ pub struct App {
     inspected_track: Option<Track>,
 }
 impl App {
+    fn request_failed(&mut self, request: &Request) {
+        if let Request::Equalizer(settings) = request
+            && self.eq_pending.as_ref() == Some(settings)
+        {
+            self.eq_pending = None;
+            self.config.equalizer = self.eq_confirmed.clone();
+        }
+    }
     pub fn new(config: Config) -> Self {
+        let eq_confirmed = config.equalizer.clone();
         Self {
+            eq_selected: 0,
+            eq_preset: 0,
+            eq_pending: None,
+            eq_confirmed,
             config,
             status: None,
             screen: 1,
@@ -152,6 +171,7 @@ impl App {
             input: Input::None,
             text: String::new(),
             query: String::new(),
+            catalog_context: "Apple Music catalog".into(),
             kind: "search:songs".into(),
             search_type: 0,
             note: "/ Search • ? Help • :audio Playback capabilities".into(),
@@ -216,6 +236,13 @@ impl App {
         self.lyrics_result = Some(result);
     }
     fn on_status(&mut self, status: Status) -> Option<Request> {
+        self.eq_confirmed = status.equalizer.clone();
+        if self.eq_pending.as_ref() == Some(&status.equalizer) {
+            self.eq_pending = None;
+        }
+        if self.eq_pending.is_none() {
+            self.config.equalizer = status.equalizer.clone();
+        }
         let changed = self.status.as_ref().is_none_or(|old| {
             old.queue_revision != status.queue_revision
                 || old.queue_len != status.queue_len
@@ -237,7 +264,7 @@ impl App {
             self.inspected_track
                 .as_ref()
                 .or_else(|| self.status.as_ref()?.playback.track.as_ref())
-        } else if matches!(self.screen, 2 | 4 | 5 | 7) {
+        } else if matches!(self.screen, 2..=5 | 7) {
             self.items.get(self.selected)
         } else {
             self.status.as_ref()?.playback.track.as_ref()
@@ -348,7 +375,7 @@ impl App {
             self.note =
                 "Public Apple catalog · type a query, Tab changes type, Enter searches".into();
         }
-        (screen == 7).then(|| self.page_request())
+        matches!(screen, 3 | 7).then(|| self.page_request())
     }
 
     fn command(&mut self) -> Result<Option<Request>> {
@@ -483,7 +510,7 @@ impl App {
                         self.query = self.text.trim().into();
                         self.kind = format!(
                             "search:{}",
-                            ["songs", "albums", "artists"][self.search_type]
+                            ["songs", "albums", "artists", "library-songs"][self.search_type]
                         );
                         Some(self.page_request())
                     } else {
@@ -505,13 +532,29 @@ impl App {
                 KeyCode::F(2) | KeyCode::Tab | KeyCode::Up | KeyCode::Down
                     if self.input == Input::Search =>
                 {
-                    self.search_type = (self.search_type + 1) % 3
+                    self.search_type = (self.search_type + 1) % 4
                 }
                 _ => {}
             }
             return Ok((false, None));
         }
         let action = keys::action_for(k, &self.config.keybindings);
+        if self.screen == 9
+            && !self.sidebar
+            && self.control_focus.is_none()
+            && matches!(
+                k.code,
+                KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::Left
+                    | KeyCode::Right
+                    | KeyCode::Enter
+                    | KeyCode::Home
+                    | KeyCode::Char('j' | 'k' | 'b' | 'r')
+            )
+        {
+            return Ok((false, self.equalizer_key(k.code)));
+        }
         if let Some(index) = self.control_focus {
             match action {
                 Some("menu_left") => {
@@ -798,6 +841,12 @@ impl App {
         Ok((false, req))
     }
     fn accept(&mut self, r: &Request, value: serde_json::Value) -> Result<()> {
+        if let Request::Equalizer(settings) = r
+            && self.eq_pending.as_ref() != Some(settings)
+            && self.config.equalizer != *settings
+        {
+            return Ok(());
+        }
         match r {
             Request::Browse { kind, term, next } => {
                 if kind != &self.kind || term != &self.query {
@@ -805,11 +854,13 @@ impl App {
                 }
                 self.catalog_offset = next.as_deref().and_then(|n| n.parse().ok()).unwrap_or(0);
                 let p: Page = serde_json::from_value(value)?;
+                self.catalog_context = p.context.unwrap_or_else(|| "Apple/iTunes catalog".into());
                 self.items = p.items;
                 self.next = p.next;
                 self.note = format!(
-                    "{} results · Apple/iTunes public catalog · Enter actions/open · PgDn more",
-                    self.items.len()
+                    "{} results · {} · Enter actions/open · PgDn more",
+                    self.items.len(),
+                    self.catalog_context
                 );
             }
             Request::QueuePage { offset } => {
@@ -841,6 +892,13 @@ impl App {
                     Request::Lyrics(enabled) => self.config.lyrics = *enabled,
                     Request::CatalogCountry(country) => {
                         self.config.catalog_country = country.clone()
+                    }
+                    Request::Equalizer(settings) => {
+                        self.eq_confirmed = settings.clone();
+                        if self.eq_pending.as_ref() == Some(settings) {
+                            self.eq_pending = None;
+                            self.config.equalizer = settings.clone();
+                        }
                     }
                     _ => {}
                 }
@@ -1020,12 +1078,8 @@ impl App {
             if matches!(self.screen, 2 | 4 | 5) {
                 let item = self.items.get(self.selected);
                 info = format!(
-                    "APPLE / ITUNES CATALOG\n\nNo token required for search\nCountry: {}\n\nEnter / →: actions or open\n←: previous results / menu\nPgUp / PgDn: pages\n\nStore link:\n{}\n\nChoose Play for native audio",
-                    self.status
-                        .as_ref()
-                        .map_or(self.config.catalog_country.as_str(), |s| s
-                            .catalog_country
-                            .as_str()),
+                    "APPLE MUSIC\n\n{}\n\nEnter / →: actions or open\n←: previous results / menu\nPgUp / PgDn: pages\n\nStore link:\n{}\n\nChoose Play for native audio",
+                    self.catalog_context,
                     item.and_then(|t| t.url.as_deref())
                         .unwrap_or("Select a result")
                 );
@@ -1116,12 +1170,16 @@ impl App {
         );
     }
     fn content(&self, f: &mut Frame, a: Rect, p: Palette) {
+        if self.screen == 9 {
+            self.render_equalizer(f, a, p);
+            return;
+        }
         if self.screen == 11 {
             self.render_settings(f, a, p);
             return;
         }
-        if matches!(self.screen, 3 | 6) {
-            f.render_widget(Paragraph::new("PERSONAL ACCOUNT · UNAVAILABLE\n\nPersonal library and playlist authorization is not implemented. Saving a Music User Token only stores it locally.\n\nUse Search for the public Apple catalog. ←/Esc returns to the menu.").wrap(Wrap{trim:false}),a);
+        if self.screen == 6 {
+            f.render_widget(Paragraph::new("PERSONAL ACCOUNT · UNAVAILABLE\n\nPlaylist browsing is not implemented. Use Library or Search → My library for your private songs.\n\nUse Search for the public Apple catalog. ←/Esc returns to the menu.").wrap(Wrap{trim:false}),a);
             return;
         }
 
@@ -1149,7 +1207,7 @@ impl App {
             } else if matches!(self.screen, 2 | 4 | 5) {
                 format!(
                     "SEARCH  {}  ·  {}",
-                    ["songs", "albums", "artists"][self.search_type],
+                    ["songs", "albums", "artists", "My library"][self.search_type],
                     self.query
                 )
             } else {
@@ -1164,9 +1222,9 @@ impl App {
             if self.items.is_empty() {
                 f.render_widget(
                     Paragraph::new(if self.screen == 2 {
-                        "Type a query and press Enter. Tab/F2 changes songs, albums or artists."
+                        "Type a query and press Enter. Tab/F2 changes songs, albums, artists or My library."
                     } else {
-                        "No results loaded. Choose Search and type a query. Public search does not require a token."
+                        if self.screen==3 {"MY LIBRARY · requires an accepted Music User Token. Search → My library searches your saved songs."}else{"No results loaded. Choose Search and type a query."}
                     })
                     .style(Style::default().fg(p.muted))
                     .wrap(Wrap { trim: false }),
@@ -1212,14 +1270,13 @@ impl App {
             return;
         }
         let text=match self.screen {
-            0=>"YOUR MUSIC. YOUR TERMINAL.\n\nPublic Apple/iTunes catalog: search songs, albums and artists without a token.\n↑/↓ and Enter navigate; ← opens the menu; Settings is keyboard actionable.\n\nNative playback uses your Music User Token and a local CDM.\nSearch → choose a song → Enter → Play.\nL enters a Music User Token; saving it does not verify account acceptance.\n\nTab switches navigation focus. 1–9 open screens.\n:theme monochrome | tokyo_night changes the palette.\n:profile minimal disables artwork and reduces caches.\n\nEXPERIMENTAL · See Audio Settings for available capabilities.".into(),
+            0=>"YOUR MUSIC. YOUR TERMINAL.\n\nApple Music catalog: search songs, albums and artists.\nAccount token selects your region and enables My library.\n↑/↓ and Enter navigate; ← opens the menu; Settings is keyboard actionable.\n\nNative playback uses your Music User Token and a local CDM.\nSearch → choose a song → Enter → Play.\nL enters a Music User Token; saving it does not verify account acceptance.\n\nTab switches navigation focus. 1–9 open screens.\n:theme monochrome | tokyo_night changes the palette.\n:profile minimal disables artwork and reduces caches.\n\nEXPERIMENTAL · See Audio Settings for available capabilities.".into(),
 
             1=>self.status.as_ref().and_then(|s|s.playback.track.as_ref()).map_or("Nothing playing. No audio quality has been reported.".into(),|t|format!("NOW PLAYING\n\n{}\n{}\n{}\n\n{}\n\nSpace  Play/pause\nAlt-← / →  Seek 10 seconds\n+ / -  Volume\nn / p  Next / previous\ns      Shuffle\nr      Repeat\nm      Mute\n\n:sleep MINUTES sets a sleep timer (0 cancels).",t.title,t.artist,t.album,self.status.as_ref().map(|s|s.playback.quality_label()).unwrap_or_default())),
 
-            9=>"EQUALIZER · UNAVAILABLE\n\n31  62  125  250  500  1k  2k  4k  8k  16k Hz\n\nDSP controls are not implemented in this build.\nEQ, preamp, bass, treble, normalization, crossfade and visualizer are disabled.\n\nUse your existing PipeWire DSP chain (for example EasyEffects) externally.\nNo processing or gapless guarantees are claimed.".into(),
             10=>format!("AUDIO SETTINGS\n\n● Auto               Backend chooses stream quality\n○ Data Saver         Unavailable\n○ Standard           Unavailable\n○ High Quality       Unavailable\n○ Lossless           Unavailable\n○ Hi-Res Lossless    Unavailable\n\nBackend: {}\n{}\n\nSource codec/rate/channels are reported above when active.\nSource bit depth    Unknown\nBuffer status       Device clock\n\nQuality is shown only when a native backend reports reliable source fields.\nPipeWire output format does not establish source quality.",self.status.as_ref().map_or("No playback process",|s|s.backend.as_str()),self.status.as_ref().map_or("Source quality unknown".into(),|s|s.playback.quality_label())),
             11=>format!("SETTINGS\n\nTheme: {}\nResources: {:?}\n\n:theme dark | light | catppuccin_mocha | catppuccin_latte\n:theme gruvbox | nord | monochrome | tokyo_night | custom\n:profile minimal | balanced | enhanced\n\n~/.config/rustune/config.toml\nKeybindings, custom colors, notifications, mouse\nand daemon behavior can be configured there.\n\n:login  :logout  :sleep MINUTES  :clear  :history\nDaemon mode keeps playback running when the TUI closes.",self.config.theme,self.status.as_ref().map_or(self.config.performance,|s|s.profile)),
-            _=>{let mut s="HELP · DEFAULT BINDINGS\n\n".to_owned();for (action,key) in keys::DEFAULTS {s.push_str(&format!("{key:<12}{action}   "));if s.lines().last().is_some_and(|l|l.len()>65){s.push('\n');}}s.push_str("\n\n←/Esc menu · ↑/↓ choose · Enter/→ open. Tab cycles focus.\nSongs: Enter opens actions. Settings: ↑/↓ then Enter changes a value.\nSearch: Tab/F2 changes songs/albums/artists. PgUp/PgDn changes pages.\n← returns from an album or lyrics to previous results. Alt-←/→ seeks.\nQueue: Delete removes; J/K reorder; :clear clears.\nCommands: :login :logout :profile MODE :theme NAME\n:sleep MINUTES :recent :history :queue :audio :help\nCtrl-C always exits. ~/.config/rustune/config.toml customizes bindings.");s}
+            _=>{let mut s="HELP · DEFAULT BINDINGS\n\n".to_owned();for (action,key) in keys::DEFAULTS {s.push_str(&format!("{key:<12}{action}   "));if s.lines().last().is_some_and(|l|l.len()>65){s.push('\n');}}s.push_str("\n\n←/Esc menu · ↑/↓ choose · Enter/→ open. Tab cycles focus.\nSongs: Enter opens actions. Settings: ↑/↓ then Enter changes a value.\nSearch: Tab/F2 changes songs/albums/artists/My library. PgUp/PgDn changes pages.\nEQ: e opens; ↑/↓ selects; ←/→ edits; b bypasses; r resets.\n← returns from an album or lyrics to previous results. Alt-←/→ seeks.\nQueue: Delete removes; J/K reorder; :clear clears.\nCommands: :login :logout :profile MODE :theme NAME\n:sleep MINUTES :recent :history :queue :audio :help\nCtrl-C always exits. ~/.config/rustune/config.toml customizes bindings.");s}
         };
         f.render_widget(
             Paragraph::new(text)
@@ -1341,15 +1398,15 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                         },
                         _=>{}
                     }
-                    if let Some(r)=request{if jobs.try_send(r).is_ok(){app.busy=true;}else{app.note="Command queue is full; wait for the current request.".into();}}
+                    if let Some(r)=request{match jobs.try_send(r){Ok(())=>app.busy=true,Err(error)=>{app.request_failed(&error.into_inner());app.note="Command queue is full; wait for the current request.".into();}}}
 
                 }
                 Some((r,result))=responses.recv()=>{
                     app.busy=false;
-                    if let Request::Browse {kind,term,..}=&r && (kind!=&app.kind || term!=&app.query || !matches!(app.screen,2|4|5)) {continue;}
+                    if let Request::Browse {kind,term,..}=&r && (kind!=&app.kind || term!=&app.query || !matches!(app.screen,2..=5)) {continue;}
                     if let Request::QueuePage {offset}=&r && (app.screen!=7 || *offset!=app.queue_offset) {continue;}
                     match result {Ok(v)=>{if let Err(e)=app.accept(&r,v){app.note=e.to_string();}
-                    if app.screen==7 && !matches!(r,Request::QueuePage{..}){let _=jobs.try_send(app.page_request());}},Err(e)=>app.note=e.to_string()}
+                    if app.screen==7 && !matches!(r,Request::QueuePage{..}){let _=jobs.try_send(app.page_request());}},Err(e)=>{app.request_failed(&r);app.note=e.to_string();}}
 
                 }
                 Some(update) = status.recv() => match update {

@@ -23,8 +23,8 @@ impl Controller {
     ) -> Result<Self> {
         let command = Control::Start { id, volume };
         command.validate()?;
-        let mut child = tokio::process::Command::new(std::env::current_exe()?)
-            .arg("audio-worker")
+        let executable = super::worker::audio_executable(&std::env::current_exe()?)?;
+        let mut child = tokio::process::Command::new(executable)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())

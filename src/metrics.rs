@@ -22,6 +22,18 @@ pub fn parse_memory(s: &str) -> Memory {
     }
     m
 }
+#[cfg(test)]
+mod helper_tests {
+    use super::*;
+    #[test]
+    fn native_measurement_includes_the_separate_audio_helper() {
+        let status:crate::service::Status=serde_json::from_value(serde_json::json!({"playback":{},"queue_len":0,"current":null,"repeat":"off","shuffle":false,"profile":"balanced","pid":11,"audio_pid":12,"browser_pid":null,"backend":"native","browser_shared":false,"uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null})).unwrap();
+        let map = BTreeMap::from([(11, (1, 11, 0)), (12, (11, 12, 0))]);
+        let (native, browser) = members(&map, Some(&status));
+        assert!(native.contains(&11) && native.contains(&12));
+        assert!(browser.is_empty());
+    }
+}
 /// (parent PID, process group, user + system ticks); comm may contain ')' or spaces.
 pub fn parse_stat(s: &str) -> Option<(u32, u32, u64)> {
     let end = s.rfind(')')?;
@@ -137,6 +149,12 @@ fn members(
         && !native.contains(&s.pid)
     {
         native.push(s.pid);
+    }
+    if let Some(pid) = status.and_then(|s| s.audio_pid)
+        && map.contains_key(&pid)
+        && !native.contains(&pid)
+    {
+        native.push(pid);
     }
     if native.is_empty() {
         native.push(me);

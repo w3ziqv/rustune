@@ -2028,20 +2028,18 @@ dependencies = [
 name = "rustune"
 version = "0.1.0"
 dependencies = [
- "alsa",
  "anyhow",
  "base64",
- "cdm-host",
  "clap",
  "crossterm",
  "fastrand",
- "ffmpeg-next",
  "httpdate",
  "image",
  "nix",
  "ratatui",
  "ratatui-image",
  "reqwest",
+ "rustune-core",
  "serde",
  "serde_json",
  "tempfile",
@@ -2051,6 +2049,37 @@ dependencies = [
  "tracing-subscriber",
  "unicode-width",
  "zbus",
+ "zeroize",
+]
+
+[[package]]
+name = "rustune-audio"
+version = "0.1.0"
+dependencies = [
+ "alsa",
+ "anyhow",
+ "base64",
+ "cdm-host",
+ "ffmpeg-next",
+ "nix",
+ "reqwest",
+ "rustune-core",
+ "serde_json",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
+name = "rustune-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "fastrand",
+ "nix",
+ "reqwest",
+ "serde",
+ "serde_json",
  "zeroize",
 ]
 
