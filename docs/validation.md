@@ -28,8 +28,8 @@ navigation, public searches, lyrics/artwork, themes, queue and masked login. The
 do not prove account acceptance or audio; genuine playback evidence is separate.
 
 Paired30s real EQ-off playback samples including all three processes showed
-PSS141.23→110.46 MiB (−21.79%; prior run −20.04%). See [measurements](benchmarking.md). No pushes,
-PRs, tags, releases, supplied credentials or proprietary CDM binaries were published.
+PSS141.23→110.46 MiB (−21.79%; prior run −20.04%). See [measurements](benchmarking.md). Validation was completed locally before the user authorized publication of
+`v0.1.0`. Supplied credentials and proprietary CDM binaries remain private.
 
 The [installed pair](validation/2026-11-10-eq-search-installed.json) matches the
 verified release hashes. The real user token (inode/mtime/mode/content), configuration

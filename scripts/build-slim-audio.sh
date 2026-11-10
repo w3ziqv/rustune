@@ -37,4 +37,4 @@ if [[ ! -f "$rustune_prefix/lib/pkgconfig/libavcodec.pc" ]]; then
 fi
 cd -- "$rustune_repo"
 PKG_CONFIG_PATH="$rustune_prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" \
-    "${CARGO:-$HOME/.cargo/bin/cargo}" build --release -p rustune-audio --features slim-ffmpeg
+    "${CARGO:-$HOME/.cargo/bin/cargo}" build --locked --release --workspace --features rustune-audio/slim-ffmpeg

@@ -1,6 +1,7 @@
 # Local RAM, EQ and search revision — 2026-11-10
 
-Installed both executables locally; no push, PR, tag or release. Token file identity,
+Installed and verified both executables locally before publication. The user
+subsequently authorized the `v0.1.0` source release. Token file identity,
 configuration bytes and all39 queue records were preserved. Reopen an old TUI.
 
 Measured real playback with cover visible: peak total PSS141.23→110.46 MiB,

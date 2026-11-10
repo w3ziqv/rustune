@@ -16,8 +16,10 @@ User exception (2026-11-08): anonymous HTTP retrieval of Apple's public applicat
 token is authorized, without browser sessions/cookies or private user-token
 extraction. Keep it only in private local configuration/cache, never in source,
 logs, argv or messages. The supplied Media User Token remains private.
-Latest user instruction: do not publish this native playback work or any obtained
-credentials to GitHub. Continue locally; no pushes, PRs, tags or releases.
+Publication authorization (2026-11-10): the user explicitly requested publishing
+this version to GitHub, superseding the earlier local-only restriction. Source,
+commits, CI and a versioned release may be published. Credentials, private caches,
+personal session data and the proprietary CDM must remain local.
 
 Distinguish implemented behavior from verified live playback. No release tag
 until a subscribed account has played a complete song through the real backend.

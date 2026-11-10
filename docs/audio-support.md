@@ -2,18 +2,27 @@
 
 | Feature | Current status |
 |---|---|
-| Native Apple Music playback | Not implemented |
-| Browser playback, extension, native messaging | Removed |
-| Public Apple/iTunes catalog metadata | Search songs/albums/artists, album tracks and artist albums; no token required |
-| Transport, personal library/playlists, nonzero sleep timer | Distinct unavailable playback or account-authorization errors |
-| Source codec, bitrate, sample rate, depth, channels, buffer | Unknown |
-| Lossless / Hi-Res, quality selection, EQ, DSP, visualizer | Unavailable |
-| Lyrics | Free LRCLIB LRC/plain/instrumental lookup; wrapped, scrollable silent queue preview |
-| Artwork | Real lazy Apple covers; bounded cache and decode, halfblocks/Kitty/iTerm2 |
-| Local Music User Token | Masked entry, private storage, cancellation/logout; Apple acceptance unverified |
+| Native Apple Music playback | CDM → AAC → PCM → ALSA/PipeWire; complete subscribed song verified |
+| Browser playback, extension, native messaging | Removed; no browser runtime |
+| Catalog metadata | Apple Music songs/albums/artists and lookups; explicit iTunes fallback |
+| Private song library | Accepted Media User Token enables listing/search and account region |
+| Personal playlists/recent history | Not implemented |
+| Transport | Play/pause, Next/Previous, seek, software volume/mute, sleep timer and MPRIS |
+| Source quality | Decoder-reported codec, sample rate and channels;256kb/s is a reported target |
+| Bit depth/lossless/Atmos | Unknown or unsupported; output format does not prove source format |
+| Equalizer | Ten independent stereo bands, preamp, presets, bypass, headroom and live smoothing |
+| Visualizer/crossfade/gapless guarantees | Unavailable |
+| Lyrics | Free LRCLIB synced/plain/instrumental lookup; wrapping and keyboard scrolling |
+| Artwork | Real bounded lazy Apple covers, halfblocks/Kitty/iTerm2 |
+| Local token | Bounded masked entry, private storage, cancellation/logout |
 
-Saving a token does not establish a playback engine, subscription entitlement or
-stream quality. No preview or fabricated audio signal is presented as native
-playback. A complete subscribed song must play through a real authorized engine
-before release tagging. PipeWire's output format does not establish the source
-format; there is no PCM path for Rustune DSP in this build.
+A token identifies a subscriber; it does not supply a DRM playback engine.
+The separate native helper, compatible local CDM and Apple license/subscription
+checks are also required. Saving a token confirms local storage only. No previews
+or generated audio stand in for full playback. Uploaded songs without a catalog
+ID cannot be played by the catalog-song backend. Source quality fields stay
+unknown unless the backend can report them reliably.
+
+See [validation](validation.md) for actual subscribed complete-song and EQ tests,
+separate synthetic/unit/PTY coverage, exact binary hashes and memory measurements.
+Long-duration memory stability and unsupported formats remain unverified.

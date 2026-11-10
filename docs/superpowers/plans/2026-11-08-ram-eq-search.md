@@ -1,5 +1,8 @@
 # RAM, equalizer and search Implementation Plan
 
+Historical implementation plan: the user subsequently authorized GitHub publication
+on2026-11-10. The local-only constraints below governed the implementation phase.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
 **Goal:** Reduce measured RAM, add a real ten-band EQ and find combined song/artist queries reliably.

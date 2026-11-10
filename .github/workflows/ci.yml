@@ -15,13 +15,17 @@ jobs:
           toolchain: ${{ matrix.toolchain }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@e9d7b9f1e587218970671bac74e5511ed9506e6a # v2
-      - name: D-Bus integration test dependency
+      - name: Native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y dbus
+          sudo apt-get install -y dbus build-essential pkg-config python3 libasound2-dev libssl-dev libclang-dev
+      - name: Build pinned minimal FFmpeg and native executables
+        run: scripts/build-slim-audio.sh
+      - name: Use the private FFmpeg build for checks
+        run: echo "PKG_CONFIG_PATH=$HOME/.cache/rustune-build/ffmpeg-9.0.2/install/lib/pkgconfig" >> "$GITHUB_ENV"
       - run: cargo fmt --all -- --check
         if: matrix.toolchain == 'stable'
-      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo clippy --locked --all-targets --features rustune-audio/slim-ffmpeg -- -D warnings
         if: matrix.toolchain == 'stable'
-      - run: cargo test --locked
-      - run: cargo build --locked --release
+      - run: cargo test --locked --features rustune-audio/slim-ffmpeg
+      - run: cargo build --locked --release --workspace --features rustune-audio/slim-ffmpeg

@@ -1,6 +1,11 @@
 # Feasibility and research — 2026-11-08
 
-## Current target and blocker
+This is a historical research record from before native playback was implemented.
+Current native CDM playback and EQ are documented in [audio support](audio-support.md)
+and backed by [live validation](validation.md). Browser research below describes
+removed code and is not an installation guide or a supported runtime.
+
+## Initial target and blocker
 
 The user requires native playback with their own Music User Token, no browser
 process and no Music Assistant dependency. Music Assistant is a research

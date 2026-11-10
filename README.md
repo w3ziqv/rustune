@@ -10,8 +10,8 @@ application authorization, a locally installed Widevine CDM, native AAC decoding
 and ALSA/PipeWire audio. No content keys are extracted. Apple subscription and
 license requirements remain enforced. Private song-library listing and search use your accepted Media User Token;
 playlist browsing remains unavailable. A subscribed complete song has been verified through the
-native service and TUI; see [live validation](docs/validation.md). No release tag
-is published, and the native playback work remains local.
+native service and TUI; see [live validation](docs/validation.md). This remains
+experimental; the first source release is `v0.1.0`.
 
 Browser playback, browser authorization, extensions and native-messaging setup
 have been removed. Rustune does not start or connect to a browser. Music Assistant
@@ -19,11 +19,11 @@ is not a dependency.
 
 ## Install
 
-Linux, stable Rust 1.99.1 (minimum 1.99), a C++ compiler, FFmpeg 9 development
-headers, ALSA development headers, D-Bus, and a UTF-8 terminal:
+Linux, stable Rust 1.99.1 (minimum 1.99), a C++ compiler, make, pkg-config,
+Python 3, libclang, OpenSSL/ALSA development headers, D-Bus, and a UTF-8 terminal:
 
 ```sh
-cargo build --release
+scripts/build-slim-audio.sh
 install -Dm755 target/release/rustune ~/.local/bin/rustune
 install -Dm755 target/release/rustune-audio ~/.local/bin/rustune-audio
 rustune init
@@ -31,10 +31,11 @@ rustune login
 rustune
 ```
 
-For the smaller audio build, run `scripts/build-slim-audio.sh` after the normal
-build, then install both executables. It builds checksum-pinned minimal FFmpeg
-privately and preserves verified HTTPS; system libraries are unchanged. Standard
-builds use system FFmpeg. The two executables must remain beside each other.
+The script builds both executables and checksum-pinned minimal FFmpeg9.0.2
+privately, preserving verified HTTPS and leaving system libraries unchanged.
+Alternatively, `cargo build --locked --release` uses system FFmpeg9 development
+libraries. The two executables must remain beside each other. See the
+[installation guide](docs/installation.md) for distro dependencies and updates.
 
 Install a compatible signed `libwidevinecdm.so` privately at
 `~/.cache/rustune/drm/libwidevinecdm.so` (directory 0700, file 0600). The proprietary
