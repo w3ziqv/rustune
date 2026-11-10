@@ -1,6 +1,37 @@
-# Validation — 2026-11-08
+# Validation
 
-## Native subscribed playback verified
+## RAM, native equalizer and account search — 2026-11-10
+
+Current workspace checks passed on stable Rust1.99.1: format, Clippy with warnings
+denied,105 Rust tests (3 network/visual tests remain opt-in), standard workspace
+release and separately built slim audio release. A fresh independent review found four navigation/pagination issues; all received
+failing-then-passing regressions and the whole suite passed afterward. Final
+[67 real native control checks](validation/2026-11-10-eq-search-controls.json) also
+verify EQ-enabled paused seek/resume, Alt-arrows within EQ and pinned-page return.
+The final helper matches the complete-song helper exactly.
+
+The genuine subscribed native [full-song test](validation/2026-11-10-eq-search-full-song.json)
+passed58 checks:359.746757s output versus359.72787s manifest,15493 protected
+packets/decoded frames, no preview or browser, real artwork/source fields and
+Vocal EQ applied to a fresh full-song worker. It also exercised actual A&W playback,
+Bass preset, rapid arrows, PCM attenuation, bypass and persistent config.
+
+Real Apple Music catalog searches `A&W`, `A&W lana del rey` and `A&W lana del ray`
+found the original1655349125 among the first five results. The user token was
+accepted for account region and private song-library listing/search (25 rows in
+the sampled page). Private song names are not recorded. A successful no-match
+response returns an empty page; a local HTTP fixture verifies that catalog calls
+omit the user token/cookies while account calls carry the private token.
+
+Separate artificial-token PTY runs passed [52 keyboard](validation/2026-11-10-eq-search-keyboard.json) and [65 general checks](validation/2026-11-10-eq-search-functional.json) for
+navigation, public searches, lyrics/artwork, themes, queue and masked login. They
+do not prove account acceptance or audio; genuine playback evidence is separate.
+
+Paired30s real EQ-off playback samples including all three processes showed
+PSS137.32→109.81 MiB (−20.04%). See [measurements](benchmarking.md). No pushes,
+PRs, tags, releases, supplied credentials or proprietary CDM binaries were published.
+
+## Native subscribed playback verified — earlier revision
 
 The real native CDM/AAC/ALSA backend played the complete subscribed catalog song
 “Simple Man”: 359.746757 seconds against a 359.72787-second full manifest,

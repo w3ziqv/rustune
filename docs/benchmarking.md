@@ -1,8 +1,46 @@
-# Measurements — 2026-11-08
+# Measurements — 2026-11-10
+
+The native audio helper and minimal private FFmpeg reduce the measured playback
+memory on this Linux machine. These are single-run observations, not limits.
+
+Same public song (Simple Man), balanced profile, 142×39 terminal, real cover,
+EQ off, 3 s warm-up then 30 s sampling. Isolated XDG paths and private D-Bus;
+all three owned processes (TUI, service, audio/CDM helper) are summed. Browsers:0.
+
+| Measurement | Before | After |
+|---|---:|---:|
+| Peak PSS | 137.32 MiB | 109.81 MiB |
+| Peak summed RSS | 234.27 MiB | 132.14 MiB |
+| Mean PSS | 137.22 MiB | 109.78 MiB |
+| CPU, one core | 2.78% | 2.44% |
+
+Peak PSS fell by 27.51 MiB (20.04%). Summed RSS counts shared mappings multiple
+times; PSS is the better comparison for total physical memory. CPU differences
+in this short sample are not established speedups. The CDM remains included.
+The paired samples verify genuine encrypted playback, not a complete song.
+
+[Before](validation/2026-11-10-ram-before.json) and
+[after](validation/2026-11-10-ram-after.json) record exact executable hashes,
+individual process accounting and samples. Repeat with the opt-in
+`scripts/measure-playback.py --live --seconds 30 BINARY REPORT` using a test-only
+Python environment with pyte. Keep the helper beside the new binary. Do not
+rebuild/replace either binary during a run.
+
+Separately, a complete 359.75-second song with Vocal EQ enabled passed, including
+real cover/lyrics, packet/decode/output evidence and process cleanup. It peaked
+at PSS111.89 MiB and summed RSS136.05 MiB; the EQ-off paired comparison above is
+the optimization measurement. This does not establish hour-long memory stability.
+
+The UI/service no longer link FFmpeg/ALSA/CDM. The audio helper uses checksum-pinned
+FFmpeg9.0.2 with only AAC/MOV, conversion and HTTPS support. Standard workspace
+builds still support system FFmpeg; run `scripts/build-slim-audio.sh` last for
+the measured slim variant. Private build artifacts are outside the repository.
+
+## Historical measurements — 2026-11-08
 
 Arch Linux x86_64, stable Rust 1.99.1. These are single-machine samples, not
-guaranteed limits. Crucially, the current native engine is unavailable: idle
-browser-free measurements are **not active Apple Music playback measurements**.
+guaranteed limits. The older idle samples below predate the native engine and are distinct from
+the active playback measurements above.
 
 ## Isolated idle TUI + service
 

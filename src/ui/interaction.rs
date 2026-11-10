@@ -6,6 +6,7 @@ pub(super) struct BrowseView {
     query: String,
     items: Vec<Track>,
     next: Option<String>,
+    previous: Option<String>,
     selected: usize,
     queue_offset: usize,
     catalog_offset: usize,
@@ -42,6 +43,7 @@ impl App {
             query: self.query.clone(),
             items: self.items.clone(),
             next: self.next.clone(),
+            previous: self.previous.clone(),
             selected: self.selected,
             queue_offset: self.queue_offset,
             catalog_offset: self.catalog_offset,
@@ -62,6 +64,7 @@ impl App {
             view.items
         };
         self.next = view.next;
+        self.previous = view.previous;
         self.selected = view.selected;
         self.queue_offset = view.queue_offset;
         self.catalog_offset = view.catalog_offset;

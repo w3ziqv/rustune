@@ -90,23 +90,51 @@ impl Catalog {
         country: &str,
         limits: Limits,
     ) -> Result<Page> {
-        if let Some(apple) = &self.apple {
-            let result = apple.browse(kind, term, next, country, limits).await;
-            if result.is_ok()
-                || matches!(
-                    kind,
-                    "library"
-                        | "search:library-songs"
-                        | "playlists"
-                        | "recent"
-                        | "search:playlists"
-                )
-            {
-                return result;
-            }
+        let Some(apple) = &self.apple else {
+            return self.browse_itunes(kind, term, next, country, limits).await;
+        };
+        let private = matches!(
+            kind,
+            "library" | "search:library-songs" | "playlists" | "recent" | "search:playlists"
+        );
+        if let Some(cursor) = next {
+            let (provider, region, offset) = parse_cursor(cursor)?;
+            return match provider {
+                "music" => {
+                    let page = apple
+                        .browse(
+                            kind,
+                            term,
+                            Some(&format!("{region}:{offset}")),
+                            region,
+                            limits,
+                        )
+                        .await?;
+                    pin_page(page, "music")
+                }
+                "itunes" if !private => {
+                    let page = self
+                        .browse_itunes(kind, term, Some(offset), region, limits)
+                        .await?;
+                    pin_page(page, "itunes")
+                }
+                _ => Err(anyhow::anyhow!(
+                    "Invalid provider for this catalog page; restart the search"
+                )),
+            };
         }
-        self.browse_itunes(kind, term, next, country, limits).await
+        let result = apple.browse(kind, term, None, country, limits).await;
+        match result {
+            Ok(page) => pin_page(page, "music"),
+            Err(error) if private => Err(error),
+            Err(_) => pin_page(
+                self.browse_itunes(kind, term, None, country, limits)
+                    .await?,
+                "itunes",
+            ),
+        }
     }
+
     async fn browse_itunes(
         &self,
         kind: &str,
@@ -283,6 +311,8 @@ impl Catalog {
             )),
             items: items.into_iter().skip(offset).take(size).collect(),
             next: more.then(|| (offset + size).to_string()),
+            previous: (offset > 0).then(|| offset.saturating_sub(size).to_string()),
+            storefront: Some(country.to_ascii_lowercase()),
         };
         let capacity = self.capacity.load(Ordering::Relaxed);
         if state.cache.capacity != capacity {
@@ -302,6 +332,39 @@ fn clean(value: Option<&Value>, max: usize) -> String {
         .filter(|c| !c.is_control())
         .take(max)
         .collect()
+}
+fn parse_cursor(cursor: &str) -> Result<(&str, &str, &str)> {
+    ensure!(cursor.len() <= 24, "Invalid catalog page cursor");
+    let mut parts = cursor.split(':');
+    let provider = parts.next().unwrap_or("");
+    let region = parts.next().unwrap_or("");
+    let offset = parts.next().unwrap_or("");
+    ensure!(
+        matches!(provider, "music" | "itunes")
+            && parts.next().is_none()
+            && region.len() == 2
+            && region.bytes().all(|b| b.is_ascii_alphabetic())
+            && !offset.is_empty()
+            && offset.len() <= 3
+            && offset.bytes().all(|b| b.is_ascii_digit())
+            && offset.parse::<usize>().is_ok_and(|v| v < 200),
+        "Invalid catalog page cursor"
+    );
+    Ok((provider, region, offset))
+}
+fn pin_page(mut page: Page, provider: &str) -> Result<Page> {
+    let region = page
+        .storefront
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("Catalog region missing"))?;
+    ensure!(
+        region.len() == 2 && region.bytes().all(|b| b.is_ascii_alphabetic()),
+        "Invalid catalog region"
+    );
+    let wrap = |offset: String| format!("{provider}:{}:{offset}", region.to_ascii_lowercase());
+    page.next = page.next.map(wrap);
+    page.previous = page.previous.map(wrap);
+    Ok(page)
 }
 fn map_record(record: &Value, wanted: &str) -> Option<Track> {
     let (id, title) = match wanted {
@@ -391,6 +454,115 @@ mod tests {
             String::from_utf8(request[..len].to_vec()).unwrap()
         });
         (origin, task)
+    }
+    async fn sequence_server(
+        responses: Vec<(&'static str, Value)>,
+    ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for (status, body) in responses {
+                let Ok(Ok((mut socket, _))) =
+                    tokio::time::timeout(Duration::from_millis(300), listener.accept()).await
+                else {
+                    break;
+                };
+                let mut request = vec![0; 8192];
+                let mut n = 0;
+                while !request[..n].windows(4).any(|w| w == b"\r\n\r\n") {
+                    n += socket.read(&mut request[n..]).await.unwrap();
+                }
+                requests.push(String::from_utf8(request[..n].to_vec()).unwrap());
+                let body = body.to_string();
+                socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+            }
+            requests
+        });
+        (origin, task)
+    }
+    fn fixture_paths(root: &std::path::Path) -> crate::config::Paths {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        let paths = crate::config::Paths {
+            config: root.join("config"),
+            data: root.join("data"),
+            cache: root.join("cache"),
+            runtime: root.join("run"),
+        };
+        paths.init().unwrap();
+        let fake = format!(
+            "{}.{}.fixture",
+            URL_SAFE_NO_PAD.encode(r#"{"alg":"ES256","kid":"fixture"}"#),
+            URL_SAFE_NO_PAD.encode(r#"{"iss":"fixture","exp":4102444800}"#)
+        );
+        crate::config::private_write(&paths.cache.join("apple-app-token"), fake.as_bytes())
+            .unwrap();
+        paths
+    }
+    #[tokio::test]
+    async fn fallback_pages_pin_provider_and_region_across_apple_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = fixture_paths(dir.path());
+        let music = json!({"results":{"songs":{"data":[{"id":"99","type":"songs","attributes":{"name":"Different Apple result"}}]}}});
+        let (apple_origin, apple_requests) =
+            sequence_server(vec![("503 Unavailable", json!({})), ("200 OK", music)]).await;
+        let tracks=(11..14).map(|id|json!({"wrapperType":"track","kind":"song","trackId":id,"trackName":"Fallback song"})).collect::<Vec<_>>();
+        let body = json!({"results":tracks});
+        let (origin, itunes_requests) =
+            sequence_server(vec![("200 OK", body.clone()), ("200 OK", body)]).await;
+        let mut catalog = Catalog::with_origin(&origin);
+        catalog.apple = Some(apple::AppleCatalog::with_origin(paths, apple_origin).unwrap());
+        let mut limits = crate::config::PerformanceMode::Balanced.limits();
+        limits.page_size = 2;
+        let first = catalog
+            .browse("search:songs", "song", None, "DE", limits)
+            .await
+            .unwrap();
+        assert_eq!(first.next.as_deref(), Some("itunes:de:2"));
+        let second = catalog
+            .browse("search:songs", "song", first.next.as_deref(), "US", limits)
+            .await
+            .unwrap();
+        assert_eq!(second.items[0].id, "13");
+        assert_eq!(
+            serde_json::to_value(&second).unwrap()["previous"].as_str(),
+            Some("itunes:de:0")
+        );
+        assert_eq!(
+            apple_requests.await.unwrap().len(),
+            1,
+            "recovery must not switch the result set"
+        );
+        let requests = itunes_requests.await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].to_lowercase().contains("country=de"));
+    }
+    #[tokio::test]
+    async fn pinned_music_page_errors_do_not_fall_back_to_a_different_result_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = fixture_paths(dir.path());
+        let body = json!({"results":{"songs":{"data":[{"id":"11","type":"songs","attributes":{"name":"Song"}}],"next":"untrusted-upstream-next"}}});
+        let (origin, requests) =
+            sequence_server(vec![("200 OK", body), ("503 Unavailable", json!({}))]).await;
+        let mut catalog = Catalog::with_origin("http://127.0.0.1:1");
+        catalog.apple = Some(apple::AppleCatalog::with_origin(paths, origin).unwrap());
+        let limits = crate::config::PerformanceMode::Balanced.limits();
+        let first = catalog
+            .browse("search:songs", "song", None, "PL", limits)
+            .await
+            .unwrap();
+        assert_eq!(first.next.as_deref(), Some("music:pl:25"));
+        let error = catalog
+            .browse("search:songs", "song", first.next.as_deref(), "US", limits)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Apple Music catalog returned HTTP 503")
+        );
+        let requests = requests.await.unwrap();
+        assert!(requests[1].starts_with("GET /v1/catalog/pl/search?"));
     }
     #[tokio::test]
     async fn anonymous_search_maps_metadata_caches_and_never_uses_previews() {

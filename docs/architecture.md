@@ -45,7 +45,10 @@ reported, and source bit depth/lossless support remain unknown/unavailable.
 Public catalog metadata is separate from the playback capability. A bounded
 Apple Music catalog client (with iTunes fallback) runs in IPC client tasks, so a slow metadata request
 does not block canonical queue/status handling. Public catalog requests send no user credentials
-and ignore preview audio URLs. Numeric page cursors cannot redirect requests.
+and ignore preview audio URLs. Allowlisted provider/region/offset cursors cannot redirect requests. Cursors
+pin both provider and storefront across page navigation; a failure on a pinned
+page remains an error instead of switching result sets. Explicit previous
+cursors preserve each backend’s actual page size.
 Public records are bounded, sanitized, cached and attributed with store links.
 Account region is verified through `me/storefront` and cached briefly. Library
 listing/search use fixed private endpoints with the user token, invalidated on

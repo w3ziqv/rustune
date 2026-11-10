@@ -73,6 +73,8 @@ request budget. Account region from me/storefront overrides this fallback countr
 Private library requests send the token only to fixed Apple account endpoints.
 The iTunes metadata fallback has a 512 KiB bound. Cached requests avoid network calls;
 HTTP Retry-After is honored. A store link accompanies public result metadata.
+Page cursors retain the original provider and storefront; retry a failed page
+or start a new query to select a source again.
 
 ```toml
 [equalizer]

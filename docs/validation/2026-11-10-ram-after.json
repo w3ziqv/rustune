@@ -1,0 +1,856 @@
+{
+  "binary_sha256": "e6b6331e94c8f3727011e3075edd66ddb1481cdbd2bb7e133b72fa987113ca61",
+  "requested_seconds": 30,
+  "profile": "balanced",
+  "equalizer": "off",
+  "browser_processes": 0,
+  "samples": [
+    {
+      "seconds": 0.0015487120001580479,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 0
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13068,
+          "pss_kib": 7203,
+          "cpu_ticks": 10
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101408,
+          "cpu_ticks": 103
+        }
+      ],
+      "rss_kib": 135280,
+      "pss_kib": 112444
+    },
+    {
+      "seconds": 1.0031798680001884,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 0
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13068,
+          "pss_kib": 7203,
+          "cpu_ticks": 10
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101408,
+          "cpu_ticks": 104
+        }
+      ],
+      "rss_kib": 135280,
+      "pss_kib": 112444
+    },
+    {
+      "seconds": 2.0049472770001557,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 0
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13068,
+          "pss_kib": 7203,
+          "cpu_ticks": 10
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101408,
+          "cpu_ticks": 106
+        }
+      ],
+      "rss_kib": 135280,
+      "pss_kib": 112444
+    },
+    {
+      "seconds": 3.0064193180000984,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 0
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13068,
+          "pss_kib": 7203,
+          "cpu_ticks": 11
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101358,
+          "cpu_ticks": 109
+        }
+      ],
+      "rss_kib": 135280,
+      "pss_kib": 112394
+    },
+    {
+      "seconds": 4.008049071000187,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 0
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13088,
+          "pss_kib": 7223,
+          "cpu_ticks": 11
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101359,
+          "cpu_ticks": 111
+        }
+      ],
+      "rss_kib": 135300,
+      "pss_kib": 112415
+    },
+    {
+      "seconds": 5.010025057000121,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 0
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13092,
+          "pss_kib": 7165,
+          "cpu_ticks": 12
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101359,
+          "cpu_ticks": 114
+        }
+      ],
+      "rss_kib": 135304,
+      "pss_kib": 112357
+    },
+    {
+      "seconds": 6.011952315000144,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 1
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13092,
+          "pss_kib": 7165,
+          "cpu_ticks": 13
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101408,
+          "cpu_ticks": 116
+        }
+      ],
+      "rss_kib": 135304,
+      "pss_kib": 112406
+    },
+    {
+      "seconds": 7.013908361000176,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 1
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13092,
+          "pss_kib": 7165,
+          "cpu_ticks": 13
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101408,
+          "cpu_ticks": 119
+        }
+      ],
+      "rss_kib": 135304,
+      "pss_kib": 112406
+    },
+    {
+      "seconds": 8.015750888000184,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 1
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13092,
+          "pss_kib": 7165,
+          "cpu_ticks": 14
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101408,
+          "cpu_ticks": 121
+        }
+      ],
+      "rss_kib": 135304,
+      "pss_kib": 112406
+    },
+    {
+      "seconds": 9.01721789300018,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 1
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13096,
+          "pss_kib": 7169,
+          "cpu_ticks": 14
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101408,
+          "cpu_ticks": 124
+        }
+      ],
+      "rss_kib": 135308,
+      "pss_kib": 112410
+    },
+    {
+      "seconds": 10.01868159500009,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 1
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13096,
+          "pss_kib": 7169,
+          "cpu_ticks": 14
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101408,
+          "cpu_ticks": 126
+        }
+      ],
+      "rss_kib": 135308,
+      "pss_kib": 112410
+    },
+    {
+      "seconds": 11.020510478000006,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 1
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13096,
+          "pss_kib": 7169,
+          "cpu_ticks": 15
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101408,
+          "cpu_ticks": 127
+        }
+      ],
+      "rss_kib": 135308,
+      "pss_kib": 112410
+    },
+    {
+      "seconds": 12.02210707800009,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 1
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13096,
+          "pss_kib": 7169,
+          "cpu_ticks": 15
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101408,
+          "cpu_ticks": 130
+        }
+      ],
+      "rss_kib": 135308,
+      "pss_kib": 112410
+    },
+    {
+      "seconds": 13.023823360000051,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 1
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13096,
+          "pss_kib": 7169,
+          "cpu_ticks": 15
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101408,
+          "cpu_ticks": 131
+        }
+      ],
+      "rss_kib": 135308,
+      "pss_kib": 112410
+    },
+    {
+      "seconds": 14.02558177900005,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 1
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13100,
+          "pss_kib": 7173,
+          "cpu_ticks": 16
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101408,
+          "cpu_ticks": 133
+        }
+      ],
+      "rss_kib": 135312,
+      "pss_kib": 112414
+    },
+    {
+      "seconds": 15.02769516100011,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 1
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13100,
+          "pss_kib": 7173,
+          "cpu_ticks": 16
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101408,
+          "cpu_ticks": 134
+        }
+      ],
+      "rss_kib": 135312,
+      "pss_kib": 112414
+    },
+    {
+      "seconds": 16.02924589400004,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 1
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13100,
+          "pss_kib": 7173,
+          "cpu_ticks": 16
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101407,
+          "cpu_ticks": 136
+        }
+      ],
+      "rss_kib": 135312,
+      "pss_kib": 112413
+    },
+    {
+      "seconds": 17.03077326200014,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 1
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13104,
+          "pss_kib": 7176,
+          "cpu_ticks": 17
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101405,
+          "cpu_ticks": 139
+        }
+      ],
+      "rss_kib": 135316,
+      "pss_kib": 112414
+    },
+    {
+      "seconds": 18.03246120400013,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 1
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13104,
+          "pss_kib": 7176,
+          "cpu_ticks": 17
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101405,
+          "cpu_ticks": 140
+        }
+      ],
+      "rss_kib": 135316,
+      "pss_kib": 112414
+    },
+    {
+      "seconds": 19.03408332900017,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 1
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13104,
+          "pss_kib": 7176,
+          "cpu_ticks": 17
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101405,
+          "cpu_ticks": 142
+        }
+      ],
+      "rss_kib": 135316,
+      "pss_kib": 112414
+    },
+    {
+      "seconds": 20.035766492999983,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 2
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13104,
+          "pss_kib": 7176,
+          "cpu_ticks": 18
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101405,
+          "cpu_ticks": 144
+        }
+      ],
+      "rss_kib": 135316,
+      "pss_kib": 112414
+    },
+    {
+      "seconds": 21.037497447000078,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 2
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13104,
+          "pss_kib": 7176,
+          "cpu_ticks": 18
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101405,
+          "cpu_ticks": 146
+        }
+      ],
+      "rss_kib": 135316,
+      "pss_kib": 112414
+    },
+    {
+      "seconds": 22.039038208000193,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 2
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13104,
+          "pss_kib": 7176,
+          "cpu_ticks": 18
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101405,
+          "cpu_ticks": 149
+        }
+      ],
+      "rss_kib": 135316,
+      "pss_kib": 112414
+    },
+    {
+      "seconds": 23.041038098000172,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 2
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13104,
+          "pss_kib": 7176,
+          "cpu_ticks": 19
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101405,
+          "cpu_ticks": 150
+        }
+      ],
+      "rss_kib": 135316,
+      "pss_kib": 112414
+    },
+    {
+      "seconds": 24.042673147000187,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 2
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13104,
+          "pss_kib": 7176,
+          "cpu_ticks": 19
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101405,
+          "cpu_ticks": 152
+        }
+      ],
+      "rss_kib": 135316,
+      "pss_kib": 112414
+    },
+    {
+      "seconds": 25.044234969000172,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 2
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13104,
+          "pss_kib": 7176,
+          "cpu_ticks": 19
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101405,
+          "cpu_ticks": 154
+        }
+      ],
+      "rss_kib": 135316,
+      "pss_kib": 112414
+    },
+    {
+      "seconds": 26.045917945000156,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 2
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13104,
+          "pss_kib": 7176,
+          "cpu_ticks": 20
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101405,
+          "cpu_ticks": 156
+        }
+      ],
+      "rss_kib": 135316,
+      "pss_kib": 112414
+    },
+    {
+      "seconds": 27.047546634000128,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 2
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13104,
+          "pss_kib": 7176,
+          "cpu_ticks": 20
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101405,
+          "cpu_ticks": 158
+        }
+      ],
+      "rss_kib": 135316,
+      "pss_kib": 112414
+    },
+    {
+      "seconds": 28.049401781000142,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 2
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13104,
+          "pss_kib": 7176,
+          "cpu_ticks": 20
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101405,
+          "cpu_ticks": 159
+        }
+      ],
+      "rss_kib": 135316,
+      "pss_kib": 112414
+    },
+    {
+      "seconds": 29.05101780400014,
+      "processes": [
+        {
+          "role": "service",
+          "pid": 30537,
+          "rss_kib": 8724,
+          "pss_kib": 3833,
+          "cpu_ticks": 2
+        },
+        {
+          "role": "tui",
+          "pid": 30539,
+          "rss_kib": 13104,
+          "pss_kib": 7176,
+          "cpu_ticks": 21
+        },
+        {
+          "role": "audio",
+          "pid": 30551,
+          "rss_kib": 113488,
+          "pss_kib": 101405,
+          "cpu_ticks": 161
+        }
+      ],
+      "rss_kib": 135316,
+      "pss_kib": 112414
+    }
+  ],
+  "complete_song_verified": false,
+  "peak_rss_kib": 135316,
+  "peak_pss_kib": 112444,
+  "mean_pss_kib": 112412.96666666666,
+  "cpu_percent_one_core": 2.4441066298025014,
+  "real_encrypted_playback_verified": true,
+  "measurement_date": "2026-11-10"
+}

@@ -69,6 +69,10 @@ pub struct Page {
     pub items: Vec<Track>,
     pub next: Option<String>,
     #[serde(default)]
+    pub previous: Option<String>,
+    #[serde(default)]
+    pub storefront: Option<String>,
+    #[serde(default)]
     pub context: Option<String>,
 }
 

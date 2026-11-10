@@ -116,6 +116,7 @@ pub struct App {
     nav: usize,
     items: Vec<Track>,
     next: Option<String>,
+    previous: Option<String>,
     queue_offset: usize,
     queue_view_revision: Option<u64>,
     catalog_offset: usize,
@@ -164,6 +165,7 @@ impl App {
             nav: 1,
             items: Vec::new(),
             next: None,
+            previous: None,
             queue_offset: 0,
             queue_view_revision: None,
             catalog_offset: 0,
@@ -349,6 +351,7 @@ impl App {
         self.selected = 0;
         self.items.clear();
         self.next = None;
+        self.previous = None;
         self.sidebar = false;
         self.query.clear();
         self.queue_offset = 0;
@@ -503,6 +506,7 @@ impl App {
                         self.control_focus = None;
                         self.items.clear();
                         self.next = None;
+                        self.previous = None;
                         self.catalog_offset = 0;
                         self.back_stack.clear();
                         self.note = "Searching the public Apple catalog…".into();
@@ -540,6 +544,7 @@ impl App {
         }
         let action = keys::action_for(k, &self.config.keybindings);
         if self.screen == 9
+            && k.modifiers.is_empty()
             && !self.sidebar
             && self.control_focus.is_none()
             && matches!(
@@ -701,6 +706,7 @@ impl App {
                         self.selected = 0;
                         self.items.clear();
                         self.next = None;
+                        self.previous = None;
                         self.note = "Loading public catalog items…".into();
                         req = Some(self.page_request());
                     }
@@ -739,16 +745,22 @@ impl App {
                     self.items.clear();
                     self.queue_view_revision = None;
                     req = Some(self.page_request());
-                } else if matches!(self.screen, 2 | 4 | 5) && self.catalog_offset > 0 {
-                    let offset = self
-                        .catalog_offset
-                        .saturating_sub(self.config.performance.limits().page_size);
-                    req = Some(Request::Browse {
-                        kind: self.kind.clone(),
-                        term: self.query.clone(),
-                        next: Some(offset.to_string()),
+                } else if matches!(self.screen, 2..=5) {
+                    let previous = self.previous.clone().or_else(|| {
+                        (self.catalog_offset > 0).then(|| {
+                            self.catalog_offset
+                                .saturating_sub(self.config.performance.limits().page_size)
+                                .to_string()
+                        })
                     });
-                    self.selected = 0;
+                    if let Some(previous) = previous {
+                        req = Some(Request::Browse {
+                            kind: self.kind.clone(),
+                            term: self.query.clone(),
+                            next: Some(previous),
+                        });
+                        self.selected = 0;
+                    }
                 }
             }
             Some("page") => {
@@ -852,11 +864,15 @@ impl App {
                 if kind != &self.kind || term != &self.query {
                     return Ok(());
                 }
-                self.catalog_offset = next.as_deref().and_then(|n| n.parse().ok()).unwrap_or(0);
+                self.catalog_offset = next
+                    .as_deref()
+                    .and_then(|n| n.rsplit(':').next()?.parse().ok())
+                    .unwrap_or(0);
                 let p: Page = serde_json::from_value(value)?;
                 self.catalog_context = p.context.unwrap_or_else(|| "Apple/iTunes catalog".into());
                 self.items = p.items;
                 self.next = p.next;
+                self.previous = p.previous;
                 self.note = format!(
                     "{} results · {} · Enter actions/open · PgDn more",
                     self.items.len(),

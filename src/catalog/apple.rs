@@ -80,6 +80,12 @@ impl AppleCatalog {
             }),
         })
     }
+    #[cfg(test)]
+    pub(super) fn with_origin(paths: Paths, origin: String) -> Result<Self> {
+        let mut catalog = Self::new(paths)?;
+        catalog.origin = origin;
+        Ok(catalog)
+    }
     pub fn cache_entries(&self) -> usize {
         self.entries.load(Ordering::Relaxed)
     }
@@ -235,13 +241,26 @@ impl AppleCatalog {
             term.len() <= 512 && !term.chars().any(char::is_control),
             "Invalid search text"
         );
-        let offset = match next {
-            None => 0,
-            Some(v) if !v.is_empty() && v.len() <= 3 && v.bytes().all(|b| b.is_ascii_digit()) => {
-                v.parse::<usize>().unwrap_or(200)
-            }
-            _ => return Err(anyhow!("Invalid Apple Music page cursor")),
+        let (pinned_region, raw_offset) = match next {
+            None => (None, "0"),
+            Some(cursor) => match cursor.split_once(':') {
+                Some((region, offset)) => {
+                    ensure!(
+                        region.len() == 2 && region.bytes().all(|b| b.is_ascii_alphabetic()),
+                        "Invalid Apple Music page region"
+                    );
+                    (Some(region), offset)
+                }
+                None => (None, cursor),
+            },
         };
+        ensure!(
+            !raw_offset.is_empty()
+                && raw_offset.len() <= 3
+                && raw_offset.bytes().all(|b| b.is_ascii_digit()),
+            "Invalid Apple Music page cursor"
+        );
+        let offset = raw_offset.parse::<usize>().unwrap_or(200);
         ensure!(offset < 200, "Search is limited to 200 results");
         let private = matches!(kind, "library" | "search:library-songs");
         ensure!(
@@ -281,9 +300,18 @@ impl AppleCatalog {
                 "Personal library requires an accepted Music User Token; use Login in Settings"
             );
         }
-        let storefront = state
-            .storefront
-            .clone()
+        if private && let Some(region) = pinned_region {
+            ensure!(
+                state
+                    .storefront
+                    .as_deref()
+                    .is_some_and(|v| v.eq_ignore_ascii_case(region)),
+                "Account region changed; restart the library search"
+            );
+        }
+        let storefront = pinned_region
+            .map(str::to_ascii_lowercase)
+            .or_else(|| state.storefront.clone())
             .unwrap_or_else(|| country.to_ascii_lowercase());
         let key = format!(
             "{storefront}\0{kind}\0{}\0{offset}\0{size}",
@@ -369,6 +397,8 @@ impl AppleCatalog {
             items.sort_by_key(|track| std::cmp::Reverse(rank(term, track)));
         }
         let page = Page {
+            previous: (offset > 0).then(|| offset.saturating_sub(size).to_string()),
+            storefront: Some(storefront.clone()),
             items,
             next: (result.get("next").and_then(Value::as_str).is_some() && offset + size < 200)
                 .then(|| (offset + size).to_string()),
@@ -380,8 +410,14 @@ impl AppleCatalog {
                     "Apple Music catalog"
                 },
                 storefront.to_uppercase(),
-                if state.storefront.is_some() {
+                if state
+                    .storefront
+                    .as_deref()
+                    .is_some_and(|v| v.eq_ignore_ascii_case(&storefront))
+                {
                     " · account region"
+                } else if pinned_region.is_some() {
+                    " · pinned region"
                 } else {
                     " · selected region"
                 }
@@ -542,6 +578,7 @@ mod tests {
                 json!({"results":{"library-songs":{"data":[{"id":"i.fixture","type":"library-songs","attributes":{"name":"A&W","artistName":"Lana Del Rey","playParams":{"catalogId":"11"}}}]}}}),
                 json!({"results":{},"meta":{}}),
                 json!({"results":{}}),
+                json!({"results":{"songs":{"data":[]}}}),
             ] {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut request = vec![0; 8192];
@@ -584,6 +621,23 @@ mod tests {
             assert!(empty.next.is_none());
             assert!(empty.context.is_some());
         }
+        let pinned = apple
+            .browse("search:songs", "same query", Some("us:25"), "DE", limits)
+            .await
+            .unwrap();
+        assert!(
+            pinned
+                .context
+                .as_deref()
+                .unwrap()
+                .contains("US · pinned region")
+        );
+        assert!(
+            apple
+                .browse("search:library-songs", "song", Some("us:25"), "DE", limits)
+                .await
+                .is_err()
+        );
         assert!(
             apple
                 .browse(
@@ -603,6 +657,12 @@ mod tests {
                 .contains("music-user-token: fixture-user")
         );
         assert!(requests[0].starts_with("GET /v1/me/storefront"));
+        assert!(
+            requests
+                .last()
+                .unwrap()
+                .starts_with("GET /v1/catalog/us/search?")
+        );
         assert!(requests[1].starts_with("GET /v1/catalog/pl/search?"));
         assert!(!requests[1].to_lowercase().contains("music-user-token:"));
         assert!(!requests[1].to_lowercase().contains("cookie:"));

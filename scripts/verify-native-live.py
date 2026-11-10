@@ -111,6 +111,14 @@ with tempfile.TemporaryDirectory(prefix='rustune-native-live-') as directory:
                 check('account region' in page.get('context',''),'search uses region verified with the private user token')
             for scope in ['search:songs','search:library-songs']:
                 empty=rpc('browse',{'kind':scope,'term':'zzqxwjk987654321notasong','next':None});check(not empty['items'] and empty['next'] is None,'real no-match search returns an empty page: '+scope)
+            rpc('profile','enhanced')
+            first_page=rpc('browse',{'kind':'search:songs','term':'Lana Del Rey','next':None})
+            check(bool(first_page['next']) and first_page['next'].startswith('music:'),'real search cursor pins the Apple Music provider')
+            second_page=rpc('browse',{'kind':'search:songs','term':'Lana Del Rey','next':first_page['next']})
+            check(second_page['previous'].endswith(':0'),'Enhanced search supplies the actual previous page cursor')
+            restored_page=rpc('browse',{'kind':'search:songs','term':'Lana Del Rey','next':second_page['previous']})
+            check([x['id'] for x in first_page['items']]==[x['id'] for x in restored_page['items']],'real pinned search returns to the identical first page')
+            rpc('profile','balanced')
             library=rpc('browse',{'kind':'library','term':'','next':None});report['private_library_rows']=len(library['items']);check('My library' in library.get('context',''),'private user-token library listing is accepted')
             private_search=rpc('browse',{'kind':'search:library-songs','term':'A&W','next':None});check('My library' in private_search.get('context',''),'private library search endpoint accepts the saved user token')
             if library['items']:
@@ -133,6 +141,10 @@ with tempfile.TemporaryDirectory(prefix='rustune-native-live-') as directory:
             rpc('pause');wait(lambda:not status()['playback']['playing'],'enabled equalizer accepts pause')
             rpc('seek',10.0);wait(lambda:9.9<=status()['playback']['position']<11 and not status()['playback']['playing'],'enabled equalizer resets DSP on paused seek')
             rpc('play');wait(lambda:active() and status()['equalizer_samples']>4096,'enabled equalizer resumes native PCM after seek')
+            eq_before=status()['equalizer'];position_before=status()['playback']['position']
+            send(b'\x1b[1;3C');wait(lambda:status()['playback']['position']>=position_before+9.5,'Alt-Right seeks while EQ content is focused')
+            send(b'\x1b[1;3D');wait(lambda:status()['playback']['position']<position_before+5,'Alt-Left seeks while EQ content is focused')
+            check(status()['equalizer']==eq_before,'modified seek arrows preserve equalizer settings')
             report['equalizer_and_account_search_verified']=True;save()
         if args.controls_only:
             rpc('clear');duration=status()['playback']['duration'];rpc('seek',duration-.5);rpc('pause')

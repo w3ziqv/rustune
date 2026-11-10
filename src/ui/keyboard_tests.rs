@@ -179,3 +179,56 @@ fn stale_queue_pages_do_not_populate_a_search_or_another_page() {
         "queue response offset must match the current page"
     );
 }
+
+fn assert_previous_catalog_page(screen: usize) {
+    let mut app = App::new(Config {
+        performance: crate::config::PerformanceMode::Enhanced,
+        ..Config::default()
+    });
+    app.screen = screen;
+    app.kind = if screen == 3 {
+        "library"
+    } else {
+        "search:songs"
+    }
+    .into();
+    app.query = "query".into();
+    app.accept(
+        &Request::Browse {
+            kind: app.kind.clone(),
+            term: app.query.clone(),
+            next: Some("50".into()),
+        },
+        serde_json::json!({"items":[], "next":"music:pl:75", "previous":"music:pl:25"}),
+    )
+    .unwrap();
+    assert!(
+        matches!(press(&mut app, KeyCode::PageUp), Some(Request::Browse { next:Some(ref cursor),.. }) if cursor=="music:pl:25"),
+        "screen {screen} must return one actual catalog page"
+    );
+}
+#[test]
+fn library_page_up_returns_to_the_previous_page() {
+    assert_previous_catalog_page(3);
+}
+#[test]
+fn enhanced_search_page_up_returns_one_actual_catalog_page() {
+    assert_previous_catalog_page(2);
+}
+#[test]
+fn equalizer_preserves_modified_seek_bindings_and_plain_arrows_edit_bands() {
+    let mut app = App::new(Config::default());
+    app.go(9);
+    app.eq_selected = 2;
+    app.status = Some(serde_json::from_value(serde_json::json!({"playback":{"position":50.0,"duration":120.0},"queue_len":0,"current":null,"repeat":"off","shuffle":false,"profile":"balanced","pid":1,"browser_pid":null,"backend":"test","browser_shared":false,"uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null})).unwrap());
+    for (key, expected) in [(KeyCode::Right, 60.0), (KeyCode::Left, 40.0)] {
+        let request = app.key(KeyEvent::new(key, KeyModifiers::ALT)).unwrap().1;
+        assert!(matches!(request, Some(Request::Seek(position)) if position==expected));
+        assert_eq!(app.config.equalizer.bands_db[0], 0.0);
+    }
+    assert!(matches!(
+        press(&mut app, KeyCode::Right),
+        Some(Request::Equalizer(_))
+    ));
+    assert_eq!(app.config.equalizer.bands_db[0], 0.5);
+}
