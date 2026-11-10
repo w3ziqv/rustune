@@ -1,6 +1,8 @@
 //! Keyboard actions and focused menus; no network or credential handling.
 use super::*;
 pub(super) struct BrowseView {
+    album_view: Option<crate::catalog::album::AlbumRef>,
+    playlist_view: Option<crate::catalog::playlist::PlaylistRef>,
     screen: usize,
     kind: String,
     query: String,
@@ -15,6 +17,7 @@ pub(super) struct SongActions {
     track: Track,
     queue_index: Option<usize>,
     revision: u64,
+    entry_id: Option<u64>,
     selected: usize,
 }
 impl SongActions {
@@ -23,12 +26,19 @@ impl SongActions {
             &[
                 "Lyrics and cover",
                 "Play",
-                "Remove from queue",
+                "Remove and advance (if current)",
                 "Move up",
                 "Move down",
+                "Add song to Apple playlist…",
             ]
         } else {
-            &["Lyrics and cover", "Add to queue", "Play"]
+            &[
+                "Lyrics and cover",
+                "Append to end",
+                "Play song — replaces queue",
+                "Play next (FIFO)",
+                "Add song to Apple playlist…",
+            ]
         }
     }
 }
@@ -38,6 +48,8 @@ impl App {
             self.back_stack.remove(0);
         }
         self.back_stack.push(BrowseView {
+            album_view: self.album_view.clone(),
+            playlist_view: self.playlist_view.clone(),
             screen: self.screen,
             kind: self.kind.clone(),
             query: self.query.clone(),
@@ -53,6 +65,9 @@ impl App {
         let Some(view) = self.back_stack.pop() else {
             return false;
         };
+        self.playlist_target = None;
+        self.album_view = view.album_view;
+        self.playlist_view = view.playlist_view;
         self.screen = view.screen;
         self.nav = view.screen;
         self.kind = view.kind;
@@ -76,16 +91,20 @@ impl App {
     }
 
     pub(super) fn checked_queue_edit(&self, index: usize, to: Option<usize>) -> Option<Request> {
-        let track = self.items.get(index.checked_sub(self.queue_offset)?)?;
-        Some(Request::QueueEdit {
-            revision: self
-                .queue_view_revision
-                .or_else(|| self.status.as_ref().map(|s| s.queue_revision))
-                .unwrap_or(0),
-            index,
-            id: track.id.clone(),
-            to,
-        })
+        use crate::ipc::QueueAction;
+        let row = self.queue_rows.get(index.checked_sub(self.queue_offset)?)?;
+        let revision = self.queue_view_revision?;
+        let action = if let Some(to) = to {
+            QueueAction::MoveBy {
+                entry_id: row.entry_id,
+                delta: if to > index { 1 } else { -1 },
+            }
+        } else {
+            QueueAction::RemoveAndAdvance {
+                entry_id: row.entry_id,
+            }
+        };
+        Some(ipc::queue_action(revision, action))
     }
     pub(super) fn close_queue_actions(&mut self) {
         if self
@@ -99,6 +118,11 @@ impl App {
     pub(super) fn open_song_actions(&mut self, track: Track) {
         self.song_actions = Some(SongActions {
             track,
+            entry_id: if self.screen == 7 {
+                self.queue_rows.get(self.selected).map(|e| e.entry_id)
+            } else {
+                None
+            },
             revision: self
                 .queue_view_revision
                 .or_else(|| self.status.as_ref().map(|status| status.queue_revision))
@@ -126,51 +150,37 @@ impl App {
                     self.inspected_track = Some(menu.track);
                     self.go(8);
                     self.note = "Lyrics preview · playback unchanged".into();
+                } else if menu.selected == if menu.queue_index.is_some() { 5 } else { 4 } {
+                    let source = if let Some(entry_id) = menu.entry_id {
+                        ipc::PlaylistWriteSource::Entry {
+                            revision: menu.revision,
+                            entry_id,
+                        }
+                    } else {
+                        ipc::PlaylistWriteSource::Track {
+                            track: Box::new(menu.track),
+                        }
+                    };
+                    let request = self.playlist_destination(source);
+                    return (false, Some(request));
                 } else if let Some(index) = menu.queue_index {
-                    return (
-                        false,
-                        match menu.selected {
-                            1 => Some(Request::PlayQueued {
-                                revision: menu.revision,
-                                index,
-                                id: menu.track.id,
-                            }),
-                            2 => Some(Request::QueueEdit {
-                                revision: menu.revision,
-                                index,
-                                id: menu.track.id,
-                                to: None,
-                            }),
-                            3 if index > 0 => Some(Request::QueueEdit {
-                                revision: menu.revision,
-                                index,
-                                id: menu.track.id,
-                                to: Some(index - 1),
-                            }),
-                            4 if self
-                                .status
-                                .as_ref()
-                                .is_some_and(|s| index + 1 < s.queue_len) =>
-                            {
-                                Some(Request::QueueEdit {
-                                    revision: menu.revision,
-                                    index,
-                                    id: menu.track.id,
-                                    to: Some(index + 1),
-                                })
-                            }
-                            _ => None,
-                        },
-                    );
-                } else {
-                    return (
-                        false,
-                        Some(Request::Enqueue {
-                            track: menu.track,
-                            next: false,
-                            play: menu.selected == 2,
+                    let Some(entry_id) = menu.entry_id else {
+                        self.note = "Refresh Queue before editing".into();
+                        return (false, None);
+                    };
+                    let action = match menu.selected {
+                        1 => Some(ipc::QueueAction::PlayEntry { entry_id }),
+                        2 => Some(ipc::QueueAction::RemoveAndAdvance { entry_id }),
+                        3 if index > 0 => Some(ipc::QueueAction::MoveBy {
+                            entry_id,
+                            delta: -1,
                         }),
-                    );
+                        4 => Some(ipc::QueueAction::MoveBy { entry_id, delta: 1 }),
+                        _ => None,
+                    };
+                    return (false, action.map(|a| ipc::queue_action(menu.revision, a)));
+                } else {
+                    return (false, Some(self.song_request(menu.track, menu.selected)));
                 }
             }
             _ => {}

@@ -43,6 +43,9 @@ Artwork is lazy, limited to public HTTPS Apple image hosts, 2 MiB downloads,
 5-second requests and bounded decode allocations. Rendering caps at 96×48 cells.
 `auto`/`halfblocks` need no terminal query; `kitty`/`iterm2` require terminal
 support. Sixel remains unavailable until pixel geometry is verified.
+The fullscreen TUI explicitly enables RGB output even when `NO_COLOR` is inherited.
+Half-block covers require both foreground and background colors to remain images;
+the monochrome theme still uses black/white text and borders. CLI output is unaffected.
 
 `L` / `:login` and `rustune login` show bounded dots/count and save a Music User
 Token privately. Backspace edits, Ctrl-U clears, Esc cancels, Enter saves.
@@ -51,7 +54,8 @@ verify Apple account acceptance. No browser login or native messaging remains.
 
 Native playback requires the sibling rustune-audio helper, private token and
 compatible CDM. Source quality is unknown until the decoder reports it. Accepted
-account tokens enable Library and Search → My library; playlists remain unavailable.
+account tokens enable Library, Search → My library and Playlists. Explicit account
+writes, confirmations and journal limits are described in [playlists](playlists.md).
 Queue edits do not auto-play music. The service publishes changes through private
 IPC; it does not poll a browser or keep an idle playback refresh timer.
 

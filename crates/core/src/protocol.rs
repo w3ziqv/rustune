@@ -3,7 +3,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "command", content = "args", rename_all = "snake_case")]
 pub enum Control {
-    Start { id: String, volume: f64 },
+    Start {
+        id: String,
+        volume: f64,
+    },
+    Prepare {
+        id: String,
+        volume: f64,
+        paused: bool,
+    },
     Pause(bool),
     Volume(f64),
     Seek(f64),
@@ -14,7 +22,7 @@ impl Control {
     pub fn validate(&self) -> Result<()> {
         match self {
             Self::Equalizer(settings) => settings.validate()?,
-            Self::Start { id, volume } => {
+            Self::Start { id, volume } | Self::Prepare { id, volume, .. } => {
                 ensure!(
                     !id.is_empty() && id.len() <= 32 && id.bytes().all(|b| b.is_ascii_digit()),
                     "Native playback supports catalog songs only"

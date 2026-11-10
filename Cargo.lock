@@ -2026,7 +2026,7 @@ dependencies = [
 
 [[package]]
 name = "rustune"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -2054,7 +2054,7 @@ dependencies = [
 
 [[package]]
 name = "rustune-audio"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alsa",
  "anyhow",
@@ -2071,7 +2071,7 @@ dependencies = [
 
 [[package]]
 name = "rustune-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64",

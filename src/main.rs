@@ -1,6 +1,7 @@
 #![cfg_attr(not(target_os = "linux"), allow(unused))]
 #[cfg(not(target_os = "linux"))]
 compile_error!("Rustune supports Linux exclusively");
+mod playlist_cli;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use rustune::{
@@ -46,10 +47,50 @@ enum Commands {
     Logout,
     /// Print current service state as JSON
     Status,
-    /// Send a terminal/SSH control: play, pause, toggle, next, previous, mute, seek, volume, shuffle, repeat, sleep, clear, stop
+    /// Send a terminal/SSH control: play, pause, toggle, next, previous, mute, seek, volume, shuffle, repeat, sleep, clear, stop, shutdown, cancel, retry, recover-state
     Ctl {
         action: String,
         value: Option<String>,
+    },
+    /// Complete album operation: play, shuffle, next or append (play replaces queue)
+    Album {
+        id: String,
+        #[arg(long, default_value = "play")]
+        action: String,
+        #[arg(long, default_value = "music")]
+        provider: String,
+        #[arg(long)]
+        storefront: Option<String>,
+        #[arg(long)]
+        key: Option<String>,
+        #[arg(long)]
+        revision: Option<u64>,
+        #[arg(long)]
+        start_song: Option<String>,
+    },
+    /// Browse, play and explicitly write Apple Music library playlists
+    Playlist {
+        #[command(subcommand)]
+        command: playlist_cli::PlaylistCommand,
+    },
+    /// Queue occurrence operation: play, remove, up, down, clear-upcoming, undo
+    Queue {
+        action: String,
+        entry_id: Option<u64>,
+        #[arg(long)]
+        revision: Option<u64>,
+        #[arg(long)]
+        key: Option<String>,
+    },
+    /// Single catalog song: play (replaces queue), next or append
+    Song {
+        id: String,
+        #[arg(long, default_value = "play")]
+        action: String,
+        #[arg(long)]
+        key: Option<String>,
+        #[arg(long)]
+        revision: Option<u64>,
     },
     /// Search the public Apple catalog (songs, albums or artists; no token required)
     Search {
@@ -144,6 +185,156 @@ async fn main() -> Result<()> {
             if let Some(command) = command {
                 let request = match command {
                     Commands::Status => Request::Status,
+                    Commands::Album {
+                        id,
+                        action,
+                        provider,
+                        storefront,
+                        key,
+                        revision,
+                        start_song,
+                    } => {
+                        let revision = match revision {
+                            Some(r) => r,
+                            None => {
+                                serde_json::from_value::<Status>(
+                                    ipc::request(&paths, &Request::Status).await?,
+                                )?
+                                .queue_revision
+                            }
+                        };
+                        let action = match action.as_str() {
+                            "play" => ipc::AlbumAction::Play {
+                                start_song,
+                                shuffle: false,
+                            },
+                            "shuffle" => ipc::AlbumAction::Play {
+                                start_song,
+                                shuffle: true,
+                            },
+                            "next" => ipc::AlbumAction::PlayNext,
+                            "append" => ipc::AlbumAction::Append,
+                            _ => anyhow::bail!("Use play, shuffle, next or append"),
+                        };
+                        Request::Album {
+                            key: key.unwrap_or_else(ipc::operation_key),
+                            revision,
+                            album: rustune::catalog::album::AlbumRef {
+                                id,
+                                provider,
+                                storefront: storefront
+                                    .unwrap_or(config.catalog_country.to_ascii_lowercase()),
+                                title: "Album".into(),
+                            },
+                            action,
+                        }
+                    }
+                    Commands::Playlist { command } => {
+                        let status: Status =
+                            serde_json::from_value(ipc::request(&paths, &Request::Status).await?)?;
+                        command.request(status.queue_revision, &config.catalog_country)?
+                    }
+                    Commands::Queue {
+                        action,
+                        entry_id,
+                        revision,
+                        key,
+                    } => {
+                        let revision = match revision {
+                            Some(r) => r,
+                            None => {
+                                serde_json::from_value::<Status>(
+                                    ipc::request(&paths, &Request::Status).await?,
+                                )?
+                                .queue_revision
+                            }
+                        };
+                        let id = || {
+                            entry_id
+                                .context("This action requires a queue entry ID (see QueuePage)")
+                        };
+                        let action = match action.as_str() {
+                            "play" => ipc::QueueAction::PlayEntry { entry_id: id()? },
+                            "remove" => ipc::QueueAction::RemoveAndAdvance { entry_id: id()? },
+                            "up" => ipc::QueueAction::MoveBy {
+                                entry_id: id()?,
+                                delta: -1,
+                            },
+                            "down" => ipc::QueueAction::MoveBy {
+                                entry_id: id()?,
+                                delta: 1,
+                            },
+                            "clear-upcoming" => ipc::QueueAction::ClearUpcoming,
+                            "undo" => ipc::QueueAction::Undo,
+                            "list" => {
+                                println!(
+                                    "{}",
+                                    serde_json::to_string_pretty(
+                                        &ipc::request(
+                                            &paths,
+                                            &Request::QueuePage {
+                                                offset: entry_id.unwrap_or(0) as usize
+                                            }
+                                        )
+                                        .await?
+                                    )?
+                                );
+                                return Ok(());
+                            }
+                            _ => anyhow::bail!(
+                                "Use list, play, remove, up, down, clear-upcoming or undo"
+                            ),
+                        };
+                        Request::QueueAction {
+                            key: key.unwrap_or_else(ipc::operation_key),
+                            revision,
+                            action,
+                        }
+                    }
+                    Commands::Song {
+                        id,
+                        action,
+                        key,
+                        revision,
+                    } => {
+                        let revision = match revision {
+                            Some(r) => r,
+                            None => {
+                                serde_json::from_value::<Status>(
+                                    ipc::request(&paths, &Request::Status).await?,
+                                )?
+                                .queue_revision
+                            }
+                        };
+                        let track = rustune::model::Track {
+                            id,
+                            kind: "songs".into(),
+                            ..rustune::model::Track::default()
+                        };
+                        let context = rustune::queue::QueueContext::single();
+                        let action = match action.as_str() {
+                            "play" => ipc::QueueAction::PlayContext {
+                                tracks: vec![track],
+                                context,
+                                start: 0,
+                                shuffle: false,
+                            },
+                            "next" => ipc::QueueAction::PlayNext {
+                                tracks: vec![track],
+                                context,
+                            },
+                            "append" => ipc::QueueAction::Append {
+                                tracks: vec![track],
+                                context,
+                            },
+                            _ => anyhow::bail!("Use play, next or append"),
+                        };
+                        Request::QueueAction {
+                            key: key.unwrap_or_else(ipc::operation_key),
+                            revision,
+                            action,
+                        }
+                    }
                     Commands::Ctl { action, value } => control(&action, value.as_deref())?,
                     Commands::Search { term, kind } => Request::Browse {
                         kind: format!("search:{kind}"),
@@ -191,7 +382,12 @@ fn control(action: &str, value: Option<&str>) -> Result<Request> {
         "mute" => Request::Mute,
         "shuffle" => Request::Shuffle,
         "repeat" => Request::Repeat,
-        "stop" => Request::Stop,
+        "stop" => Request::StopAudio,
+        "shutdown" => Request::Shutdown,
+        "cancel" => Request::CancelOperation(value.context("cancel requires operation ID")?.into()),
+        "retry" => Request::RetryOperation,
+        "playlist-retry" => Request::RetryPlaylistWrite,
+        "recover-state" => Request::RecoverState,
         "clear" => Request::Clear,
         "seek" => Request::Seek(number()?),
         "volume" => Request::Volume(number()?),
@@ -255,7 +451,9 @@ async fn doctor(config: &Config, paths: &Paths) -> Result<()> {
         "Public catalog: Apple Music metadata, fallback country {} (account region when verified)",
         config.catalog_country
     );
-    println!("Personal library: verified Music User Token required; playlists unavailable");
+    println!(
+        "Personal library/playlists: Music User Token required; writes need explicit commands"
+    );
     println!("Lyrics: free LRCLIB; Artwork: public Apple cover URLs");
     println!("XDG runtime: {}", paths.runtime.display());
     println!(
@@ -324,4 +522,63 @@ async fn benchmark(paths: &Paths, seconds: u64) -> Result<()> {
         }))?
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod playlist_cli_tests {
+    use super::*;
+    #[test]
+    fn playlist_cli_has_explicit_account_writes_and_source_positions() {
+        let parse = |args: &[&str]| {
+            let cli = Cli::try_parse_from(args).unwrap();
+            let Some(Commands::Playlist { command }) = cli.command else {
+                panic!("playlist command")
+            };
+            command.request(42, "PL").unwrap()
+        };
+        assert!(matches!(
+            parse(&["rustune", "playlist", "create", "Synthetic"]),
+            Request::PlaylistWrite {
+                source: ipc::PlaylistWriteSource::Empty,
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse(&["rustune", "playlist", "save", "Synthetic"]),
+            Request::PlaylistWrite {
+                source: ipc::PlaylistWriteSource::Queue { revision: 42 },
+                ..
+            }
+        ));
+        assert!(matches!(
+            parse(&[
+                "rustune",
+                "playlist",
+                "play",
+                "p.fixture",
+                "--from-position",
+                "26"
+            ]),
+            Request::Playlist {
+                action: ipc::ContextAction::PlayFromPosition {
+                    source_index: 26,
+                    ..
+                },
+                ..
+            }
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "rustune",
+                "playlist",
+                "add",
+                "p.fixture",
+                "--song",
+                "1",
+                "--entry-id",
+                "2"
+            ])
+            .is_err()
+        );
+    }
 }

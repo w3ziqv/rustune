@@ -1,5 +1,12 @@
 //! Apple Music catalog/account search with bounded anonymous iTunes fallback.
+pub mod album;
 mod apple;
+pub mod playlist;
+#[cfg(test)]
+pub(crate) mod playlist_tests;
+pub mod playlist_write;
+#[cfg(test)]
+pub(crate) mod playlist_write_tests;
 use crate::{
     artwork,
     cache::Cache,
@@ -60,7 +67,7 @@ impl Catalog {
         })
     }
     #[cfg(test)]
-    fn with_origin(origin: &str) -> Self {
+    pub(crate) fn with_origin(origin: &str) -> Self {
         Self::create(origin).unwrap()
     }
     pub fn cache_entries(&self) -> usize {
@@ -91,12 +98,18 @@ impl Catalog {
         limits: Limits,
     ) -> Result<Page> {
         let Some(apple) = &self.apple else {
+            if let Some(cursor) = next.filter(|c| c.contains(':')) {
+                let (provider, region, offset) = parse_cursor(cursor)?;
+                ensure!(provider == "itunes", "Apple Music catalog unavailable");
+                return pin_page(
+                    self.browse_itunes(kind, term, Some(offset), region, limits)
+                        .await?,
+                    "itunes",
+                );
+            }
             return self.browse_itunes(kind, term, next, country, limits).await;
         };
-        let private = matches!(
-            kind,
-            "library" | "search:library-songs" | "playlists" | "recent" | "search:playlists"
-        );
+        let private = playlist::private_kind(kind);
         if let Some(cursor) = next {
             let (provider, region, offset) = parse_cursor(cursor)?;
             return match provider {
@@ -225,7 +238,11 @@ impl Catalog {
             "Apple catalog request limit reached; retry in a minute"
         );
         state.calls.push_back(now);
-        let requested = (offset + size + if id.is_some() { 2 } else { 1 }).min(MAX_RESULTS);
+        let requested = if kind.starts_with("open:albums:") {
+            MAX_RESULTS
+        } else {
+            (offset + size + if id.is_some() { 2 } else { 1 }).min(MAX_RESULTS)
+        };
         let mut params = vec![
             ("media", "music".to_owned()),
             ("entity", entity.into()),
@@ -298,17 +315,43 @@ impl Catalog {
             records.len() <= MAX_RESULTS + 1,
             "Apple catalog returned too many records"
         );
-        let items = records
+        let mut items = records
             .iter()
             .filter_map(|record| map_record(record, wanted))
             .take(MAX_RESULTS)
             .collect::<Vec<_>>();
+        for track in &mut items {
+            track.storefront = country.to_ascii_lowercase();
+        }
+        if kind.starts_with("open:albums:") && next.is_some() {
+            let expected = records
+                .iter()
+                .find_map(|r| r["trackCount"].as_u64())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Fallback cannot verify complete album; retry with Apple Music source"
+                    )
+                })? as usize;
+            ensure!(
+                expected == items.len() && expected < MAX_RESULTS,
+                "Fallback album is incomplete; retry with Apple Music source"
+            );
+        }
         let more = items.len() > offset + size;
         let page = Page {
             context: Some(format!(
                 "Apple/iTunes fallback · {}",
                 country.to_ascii_uppercase()
             )),
+            skipped: Vec::new(),
+            total: if kind.starts_with("open:albums:") {
+                records
+                    .iter()
+                    .find_map(|r| r["trackCount"].as_u64())
+                    .map(|n| n as usize)
+            } else {
+                None
+            },
             items: items.into_iter().skip(offset).take(size).collect(),
             next: more.then(|| (offset + size).to_string()),
             previous: (offset > 0).then(|| offset.saturating_sub(size).to_string()),
@@ -345,9 +388,11 @@ fn parse_cursor(cursor: &str) -> Result<(&str, &str, &str)> {
             && region.len() == 2
             && region.bytes().all(|b| b.is_ascii_alphabetic())
             && !offset.is_empty()
-            && offset.len() <= 3
+            && offset.len() <= 5
             && offset.bytes().all(|b| b.is_ascii_digit())
-            && offset.parse::<usize>().is_ok_and(|v| v < 200),
+            && offset
+                .parse::<usize>()
+                .is_ok_and(|v| v < crate::queue::MAX_QUEUE),
         "Invalid catalog page cursor"
     );
     Ok((provider, region, offset))
@@ -413,6 +458,14 @@ fn map_record(record: &Value, wanted: &str) -> Option<Track> {
         })
         .map(|url| url.to_string());
     Some(Track {
+        provider: "itunes".into(),
+        album_id: record["collectionId"].as_u64().map(|n| n.to_string()),
+        disc_number: record["discNumber"]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok()),
+        track_number: record["trackNumber"]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok()),
         id: id.to_string(),
         kind: wanted.into(),
         title,
@@ -425,6 +478,7 @@ fn map_record(record: &Value, wanted: &str) -> Option<Track> {
             .unwrap_or(0),
         artwork,
         url,
+        ..Track::default()
     })
 }
 #[cfg(test)]
@@ -498,6 +552,145 @@ mod tests {
         crate::config::private_write(&paths.cache.join("apple-app-token"), fake.as_bytes())
             .unwrap();
         paths
+    }
+    #[tokio::test]
+    async fn fallback_album_fetches_full_relation_when_server_obeys_requested_limit() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0; 8192];
+            let n = socket.read(&mut request).await.unwrap();
+            let raw = String::from_utf8_lossy(&request[..n]);
+            let path = raw.split_whitespace().nth(1).unwrap();
+            let url = reqwest::Url::parse(&format!("http://localhost{path}")).unwrap();
+            let limit = url
+                .query_pairs()
+                .find(|(key, _)| key == "limit")
+                .unwrap()
+                .1
+                .parse::<usize>()
+                .unwrap();
+            let mut records = vec![
+                json!({"wrapperType":"collection","collectionType":"Album","collectionId":42,"collectionName":"Album","trackCount":45}),
+            ];
+            records.extend(
+                (1..=45)
+                    .map(|i| json!({"kind":"song","trackId":i,"trackName":format!("Song {i}")})),
+            );
+            records.truncate(limit);
+            let body = json!({"results":records}).to_string();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        let catalog = Catalog::with_origin(&origin);
+        let mut limits = crate::config::PerformanceMode::Balanced.limits();
+        limits.cache_entries = 8;
+        // First page alone suffices to assert the request retrieved the complete source relation.
+        let first = catalog
+            .browse("open:albums:42", "", Some("itunes:pl:0"), "PL", limits)
+            .await;
+        task.await.unwrap();
+        assert!(first.is_ok(), "{:?}", first.err());
+        assert_eq!(first.unwrap().total, Some(45));
+    }
+    #[tokio::test]
+    async fn complete_album_fetches_225_tracks_and_pins_source_after_200() {
+        use crate::catalog::album::AlbumRef;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = fixture_paths(dir.path());
+        let responses=(0..9).map(|page| {
+            let data=(page*25..(page+1)*25).map(|i|json!({"id":(i+1).to_string(),"type":"songs","attributes":{"name":format!("Song {i}"),"discNumber":i/125+1,"trackNumber":i%125+1,"playParams":{"id":(i+1).to_string()}}})).collect::<Vec<_>>();
+            let mut body=json!({"data":data}); if page<8 {body["next"]=json!("untrusted-url-never-followed");} ("200 OK",body)
+        }).collect();
+        let (origin, requests) = sequence_server(responses).await;
+        let mut catalog = Catalog::with_origin("http://127.0.0.1:1");
+        catalog.apple = Some(apple::AppleCatalog::with_origin(paths, origin).unwrap());
+        let album = AlbumRef {
+            id: "42".into(),
+            provider: "music".into(),
+            storefront: "pl".into(),
+            title: "Two discs".into(),
+        };
+        let prepared = catalog
+            .album(
+                &album,
+                crate::config::PerformanceMode::Balanced.limits(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        assert_eq!(prepared.tracks.len(), 225);
+        assert_eq!(prepared.tracks[200].id, "201");
+        assert_eq!(prepared.tracks[125].disc_number, Some(2));
+        assert_eq!(prepared.tracks[0].album_id.as_deref(), Some("42"));
+        assert_eq!(requests.await.unwrap().len(), 9);
+    }
+    #[tokio::test]
+    async fn album_preserves_source_order_without_ordinals_and_reports_skips_and_truncation() {
+        use crate::catalog::album::AlbumRef;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = fixture_paths(dir.path());
+        let page = json!({"data":[{"id":"9","type":"songs","attributes":{"name":"Z","playParams":{"id":"9"}}},{"id":"8","type":"music-videos","attributes":{"name":"Video"}},{"id":"7","type":"songs","attributes":{"name":"Missing","playParams":null}},{"id":"6","type":"songs","attributes":{"name":"A","playParams":{"id":"6"}}}]});
+        let mut incomplete = page.clone();
+        incomplete["meta"] = json!({"total":200});
+        let (origin, requests) =
+            sequence_server(vec![("200 OK", page), ("200 OK", incomplete)]).await;
+        let mut catalog = Catalog::with_origin("http://127.0.0.1:1");
+        catalog.apple = Some(apple::AppleCatalog::with_origin(paths, origin).unwrap());
+        let mut album = AlbumRef {
+            id: "42".into(),
+            provider: "music".into(),
+            storefront: "pl".into(),
+            title: "Album".into(),
+        };
+        let limits = crate::config::PerformanceMode::Balanced.limits();
+        let prepared = catalog.album(&album, limits, |_| {}).await.unwrap();
+        assert_eq!(
+            prepared
+                .tracks
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
+            ["9", "6"]
+        );
+        assert_eq!(prepared.skipped.iter().map(|s| s.count).sum::<usize>(), 2);
+        album.id = "43".into();
+        assert!(catalog.album(&album, limits, |_| {}).await.is_err());
+        assert_eq!(requests.await.unwrap().len(), 2);
+    }
+    #[tokio::test]
+    async fn album_page_failure_has_no_partial_result() {
+        use crate::catalog::album::AlbumRef;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = fixture_paths(dir.path());
+        let (origin,requests)=sequence_server(vec![("200 OK",json!({"data":[{"id":"1","type":"songs","attributes":{"name":"First"}}],"next":"x"})),("503 Unavailable",json!({}))]).await;
+        let mut catalog = Catalog::with_origin("http://127.0.0.1:1");
+        catalog.apple = Some(apple::AppleCatalog::with_origin(paths, origin).unwrap());
+        assert!(
+            catalog
+                .album(
+                    &AlbumRef {
+                        id: "42".into(),
+                        provider: "music".into(),
+                        storefront: "pl".into(),
+                        title: "Album".into()
+                    },
+                    crate::config::PerformanceMode::Balanced.limits(),
+                    |_| {}
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(requests.await.unwrap().len(), 2);
     }
     #[tokio::test]
     async fn fallback_pages_pin_provider_and_region_across_apple_recovery() {

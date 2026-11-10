@@ -9,9 +9,10 @@ Native playback uses your saved Media User Token, anonymous public Apple
 application authorization, a locally installed Widevine CDM, native AAC decoding
 and ALSA/PipeWire audio. No content keys are extracted. Apple subscription and
 license requirements remain enforced. Private song-library listing and search use your accepted Media User Token;
-playlist browsing remains unavailable. A subscribed complete song has been verified through the
+playlist browsing, whole-playlist playback and explicit private playlist writes are available
+(see [playlist actions](docs/playlists.md)). A subscribed complete song has been verified through the
 native service and TUI; see [live validation](docs/validation.md). This remains
-experimental; the first source release is `v0.1.0`.
+experimental; the current source release is `v0.2.0`.
 
 Browser playback, browser authorization, extensions and native-messaging setup
 have been removed. Rustune does not start or connect to a browser. Music Assistant
@@ -61,8 +62,15 @@ valid preferences, queue data and token files are preserved.
   (PL by default). Public catalog requests do not include your user token.
   An explicitly labeled iTunes fallback is used if the Music catalog fails.
 
-- Persistent bounded queue: select, add, remove, reorder, repeat/shuffle state,
-  pagination and updates from other clients.
+- Library playlist browsing and complete ordered playback, private creation from an
+  empty list or the full queue, and explicit append to editable playlists.
+  [Playlist controls and limits](docs/playlists.md).
+
+- Complete album playback and stable shuffled sessions across every track page;
+  album actions replace, play next or append the whole album atomically.
+- Persistent bounded queue with distinct occurrence IDs, FIFO play-next blocks,
+  listening history, revision checks, clear-upcoming and one-step undo.
+  See [album and queue semantics](docs/queue.md).
 - Free LRCLIB lyrics without an API key: synced/plain/instrumental states,
   wrapping, manual scrolling, retry and a bounded cache. Select a saved queue
   song and press `l` for a silent lyrics/cover preview.
@@ -93,21 +101,26 @@ Visualizer, crossfade, gapless guarantees and lossless playback are unavailable.
 | Alt-← / Alt-→ | Seek when a playback engine is available |
 | `e` | Equalizer: ↑/↓ select, ←/→ edit, `b` bypass, `r` Flat |
 | `l` / `R` | Preview selected song lyrics / reload |
-| `J` / `K`, Delete | Reorder / remove queue item |
+| `a` on an album / its details | Whole-album actions (Enter still opens the album) |
+| `J` / `K`, Delete | Reorder / remove occurrence and advance if current |
+| `:clear`, `u` in Queue / `:undo` | Clear upcoming / undo last replacement or clear |
+| `c` / `:cancel`, `R` / `:retry` | Cancel preparation / retry album or queue operation (R on Lyrics reloads lyrics) |
+| `:stop`, `:shutdown` | Stop audio / close service |
 | `:theme monochrome` / `:theme tokyo_night` | Change theme |
 | `:profile minimal` / `balanced` / `enhanced` | Resource profile |
 | `?`, `q`, Ctrl-C | Help / quit |
 
 Settings are selectable with arrows and Enter. Enter on a song opens Lyrics /
-Add to queue / Play actions. Player buttons receive
+Append / Play song (replaces queue) / Play next actions. Album song playback
+retains its full album context. Player buttons receive
 visible keyboard focus and activate with Enter.
 
 Transport controls operate the native audio worker. Source codec, sample rate
 and channels come from the decoder; the 256 kb/s target is labeled as reported.
 Source bit depth and lossless support remain unknown/unavailable.
 `daemon = false` (default) stops an automatically created service when the TUI
-closes. An already running service is preserved. Use `rustune ctl stop` to stop
-it deliberately, or `rustune daemon` to run it in the foreground.
+closes. An already running service is preserved. Use `rustune ctl shutdown` to close
+it deliberately (`rustune ctl stop` stops only audio), or `rustune daemon` to run it in the foreground.
 
 ## Validation
 

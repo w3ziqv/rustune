@@ -21,7 +21,16 @@ impl Controller {
         generation: u64,
         events: mpsc::Sender<(u64, Event)>,
     ) -> Result<Self> {
-        let command = Control::Start { id, volume };
+        Self::start_paused(id, volume, false, generation, events).await
+    }
+    pub async fn start_paused(
+        id: String,
+        volume: f64,
+        paused: bool,
+        generation: u64,
+        events: mpsc::Sender<(u64, Event)>,
+    ) -> Result<Self> {
+        let command = Control::Prepare { id, volume, paused };
         command.validate()?;
         let executable = super::worker::audio_executable(&std::env::current_exe()?)?;
         let mut child = tokio::process::Command::new(executable)

@@ -1,4 +1,5 @@
 //! Fixed-origin Apple Music catalog and private-library search.
+mod playlist_write;
 use crate::{
     artwork,
     cache::Cache,
@@ -256,16 +257,23 @@ impl AppleCatalog {
         };
         ensure!(
             !raw_offset.is_empty()
-                && raw_offset.len() <= 3
+                && raw_offset.len() <= 5
                 && raw_offset.bytes().all(|b| b.is_ascii_digit()),
             "Invalid Apple Music page cursor"
         );
-        let offset = raw_offset.parse::<usize>().unwrap_or(200);
-        ensure!(offset < 200, "Search is limited to 200 results");
-        let private = matches!(kind, "library" | "search:library-songs");
+        let offset = raw_offset
+            .parse::<usize>()
+            .unwrap_or(crate::queue::MAX_QUEUE);
+        let max_results = if kind.starts_with("search:") {
+            200
+        } else {
+            crate::queue::MAX_QUEUE
+        };
+        ensure!(offset < max_results, "Catalog offset exceeds limit");
+        let private = super::playlist::private_kind(kind);
         ensure!(
-            !matches!(kind, "playlists" | "recent" | "search:playlists"),
-            "Personal playlists and recent history are not implemented"
+            !matches!(kind, "recent" | "search:playlists"),
+            "Recent history and playlist search are not implemented; browse Playlists"
         );
         let size = limits.page_size.clamp(1, 25);
         let mut state = self.state.lock().await;
@@ -317,7 +325,8 @@ impl AppleCatalog {
             "{storefront}\0{kind}\0{}\0{offset}\0{size}",
             term.trim().to_lowercase()
         );
-        if let Some(page) = state.cache.get(&key) {
+        let mutable_playlist = kind == "playlists" || kind.starts_with("open:library-playlists:");
+        if !mutable_playlist && let Some(page) = state.cache.get(&key) {
             return Ok(page.clone());
         }
         let mut params = vec![("limit", size.to_string()), ("offset", offset.to_string())];
@@ -341,6 +350,19 @@ impl AppleCatalog {
                 )
             }
             "library" => ("me/library/songs".into(), "library-songs", false),
+            "playlists" => ("me/library/playlists".into(), "library-playlists", false),
+            _ if kind.starts_with("open:library-playlists:") => {
+                let id = kind
+                    .strip_prefix("open:library-playlists:")
+                    .expect("matched prefix");
+                ensure!(super::playlist::valid_id(id), "Invalid library playlist ID");
+                params.push(("include", "catalog".into()));
+                (
+                    format!("me/library/playlists/{id}/tracks"),
+                    "library-songs",
+                    false,
+                )
+            }
             _ if kind.starts_with("open:albums:") || kind.starts_with("open:artists:") => {
                 let (prefix, id) = kind
                     .rsplit_once(':')
@@ -385,22 +407,51 @@ impl AppleCatalog {
                 .as_array()
                 .ok_or_else(|| anyhow!("Apple Music response has no result array"))?
         };
-        ensure!(records.len() <= 100, "Too many Apple Music records");
+        ensure!(
+            records.len() <= size,
+            "Apple Music page exceeds requested limit; nothing committed"
+        );
         let mut seen = HashSet::new();
         let mut items = records
             .iter()
-            .filter_map(|v| map_resource(v, wanted))
-            .filter(|v| seen.insert(v.id.clone()))
+            .enumerate()
+            .filter_map(|(i, v)| {
+                map_resource(v, wanted).map(|mut t| {
+                    if kind.starts_with("open:library-playlists:") {
+                        t.source_index = Some(offset + i);
+                    }
+                    t
+                })
+            })
+            .filter(|v| !search || seen.insert(v.id.clone()))
             .take(size)
             .collect::<Vec<_>>();
+        for track in &mut items {
+            track.provider = "music".into();
+            track.storefront = storefront.clone();
+        }
         if search {
             items.sort_by_key(|track| std::cmp::Reverse(rank(term, track)));
         }
         let page = Page {
+            skipped: if search {
+                Vec::new()
+            } else {
+                records
+                    .iter()
+                    .filter(|r| map_resource(r, wanted).is_none())
+                    .map(|_| crate::catalog::album::Skipped {
+                        count: 1,
+                        reason: "Unsupported or invalid album resource".into(),
+                    })
+                    .collect()
+            },
+            total: result["meta"]["total"].as_u64().map(|n| n as usize),
             previous: (offset > 0).then(|| offset.saturating_sub(size).to_string()),
             storefront: Some(storefront.clone()),
             items,
-            next: (result.get("next").and_then(Value::as_str).is_some() && offset + size < 200)
+            next: (result.get("next").and_then(Value::as_str).is_some()
+                && (!search || offset + size < max_results))
                 .then(|| (offset + size).to_string()),
             context: Some(format!(
                 "{} · {}{}",
@@ -426,7 +477,9 @@ impl AppleCatalog {
         if state.cache.capacity != self.capacity.load(Ordering::Relaxed) {
             state.cache = Cache::new(self.capacity.load(Ordering::Relaxed));
         }
-        state.cache.insert(key, page.clone());
+        if !mutable_playlist {
+            state.cache.insert(key, page.clone());
+        }
         self.entries
             .store(state.cache.entries.len(), Ordering::Relaxed);
         Ok(page)
@@ -441,7 +494,7 @@ fn clean(value: &Value, max: usize) -> String {
         .take(max)
         .collect()
 }
-fn map_resource(value: &Value, wanted: &str) -> Option<Track> {
+pub(super) fn map_resource(value: &Value, wanted: &str) -> Option<Track> {
     if value["type"] != wanted {
         return None;
     }
@@ -449,6 +502,12 @@ fn map_resource(value: &Value, wanted: &str) -> Option<Track> {
     let id = if wanted == "library-songs" {
         attributes["playParams"]["catalogId"]
             .as_str()
+            .or_else(|| {
+                value["relationships"]["catalog"]["data"]
+                    .as_array()
+                    .and_then(|a| a.iter().find(|r| r["type"] == "songs"))
+                    .and_then(|r| r["id"].as_str())
+            })
             .or_else(|| value["id"].as_str())
     } else {
         value["id"].as_str()
@@ -480,6 +539,22 @@ fn map_resource(value: &Value, wanted: &str) -> Option<Track> {
         })
         .map(|u| u.to_string());
     Some(Track {
+        can_edit: if wanted == "library-playlists" {
+            attributes["canEdit"].as_bool()
+        } else {
+            None
+        },
+        disc_number: attributes["discNumber"]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|n| *n > 0),
+        track_number: attributes["trackNumber"]
+            .as_u64()
+            .and_then(|n| u32::try_from(n).ok())
+            .filter(|n| *n > 0),
+        unavailable: (attributes.get("playParams").is_some_and(Value::is_null)
+            || attributes["isPlayable"].as_bool() == Some(false))
+        .then(|| "Unavailable in this storefront".into()),
         id: id.into(),
         kind: wanted.into(),
         title,
@@ -491,6 +566,7 @@ fn map_resource(value: &Value, wanted: &str) -> Option<Track> {
             .unwrap_or(0),
         artwork: cover,
         url,
+        ..Track::default()
     })
 }
 fn normalize(text: &str) -> String {

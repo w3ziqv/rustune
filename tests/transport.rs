@@ -49,3 +49,11 @@ fn token_permissions_and_state_writes_are_private() {
         0o600
     );
 }
+
+#[test]
+fn explicit_session_requests_keep_identity_revision_and_retry_key() {
+    let request = serde_json::json!({"command":"queue_action","args":{"key":"retry-42","revision":9,"action":{"intent":"play_entry","entry_id":17}}});
+    let parsed: rustune::ipc::Request = serde_json::from_value(request.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), request);
+    assert!(serde_json::from_value::<rustune::ipc::Request>(serde_json::json!({"command":"album","args":{"key":"album-1","revision":9,"album":{"id":"42","provider":"music","storefront":"pl","title":"Album"},"action":{"intent":"append"}}})).is_ok());
+}

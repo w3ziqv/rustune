@@ -127,9 +127,21 @@ async fn real_service_persists_queue_pushes_updates_and_obeys_mpris() {
         .await
         .unwrap();
     }
-    ipc::request(&paths, &Request::Move { from: 2, to: 0 })
+    let entries = ipc::request(&paths, &Request::QueuePage { offset: 0 })
         .await
         .unwrap();
+    ipc::request(
+        &paths,
+        &ipc::queue_action(
+            entries["revision"].as_u64().unwrap(),
+            ipc::QueueAction::Move {
+                entry_id: entries["items"][2]["entry_id"].as_u64().unwrap(),
+                before: entries["items"][0]["entry_id"].as_u64(),
+            },
+        ),
+    )
+    .await
+    .unwrap();
     let page = ipc::request(&paths, &Request::QueuePage { offset: 0 })
         .await
         .unwrap();
@@ -182,6 +194,9 @@ async fn real_service_persists_queue_pushes_updates_and_obeys_mpris() {
         ipc::request(&paths, &Request::Status).await.unwrap()["shuffle"],
         true
     );
+    let before_restart = ipc::request(&paths, &Request::QueuePage { offset: 0 })
+        .await
+        .unwrap();
     ipc::request(&paths, &Request::Stop).await.unwrap();
     for _ in 0..100 {
         if daemon.0.try_wait().unwrap().is_some() {
@@ -199,7 +214,7 @@ async fn real_service_persists_queue_pushes_updates_and_obeys_mpris() {
     let restored = ipc::request(&paths, &Request::QueuePage { offset: 0 })
         .await
         .unwrap();
-    assert_eq!(restored["items"][0]["id"], "c");
+    assert_eq!(restored["items"], before_restart["items"]);
     assert_eq!(restored["total"], 3);
     ipc::request(&paths, &Request::Stop).await.unwrap();
 }

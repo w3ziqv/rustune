@@ -55,8 +55,10 @@ pub async fn run(paths: &Paths) -> Result<()> {
 async fn run_inner(paths: &Paths) -> Result<()> {
     let first = read_control(&mut std::io::stdin())
         .map_err(|_| anyhow!("Invalid initial audio worker command"))?;
-    let Control::Start { id, volume } = first else {
-        return Err(anyhow!("Audio worker requires a start command"));
+    let (id, volume, paused) = match first {
+        Control::Start { id, volume } => (id, volume, false),
+        Control::Prepare { id, volume, paused } => (id, volume, paused),
+        _ => return Err(anyhow!("Audio worker requires a start command")),
     };
     let (tx, rx) = mpsc::sync_channel(8);
     std::thread::spawn(move || {
@@ -148,7 +150,7 @@ async fn run_inner(paths: &Paths) -> Result<()> {
         )?,
         pcm_buffer: Vec::with_capacity(4096),
         volume,
-        paused: false,
+        paused,
         stop: false,
         seek: None,
         base: 0.0,
@@ -375,7 +377,7 @@ impl AudioState {
                 Control::Volume(volume) => self.volume = volume,
                 Control::Seek(position) => self.seek = Some(position),
                 Control::Stop => self.stop = true,
-                Control::Start { .. } => self.stop = true,
+                Control::Start { .. } | Control::Prepare { .. } => self.stop = true,
             }
         }
         Ok(())

@@ -1,9 +1,14 @@
 //! Event-driven terminal client. Only visible rows are constructed.
+mod album;
 mod equalizer;
+#[cfg(test)]
+mod flow_tests;
 mod interaction;
 #[cfg(test)]
 mod keyboard_tests;
 mod player;
+mod playlists;
+mod runtime;
 use crate::{
     artwork::{self, CoverRequest, CoverResult},
     auth::{self, LocalAuth, TokenInput},
@@ -113,6 +118,13 @@ pub struct App {
     sidebar: bool,
     control_focus: Option<usize>,
     song_actions: Option<interaction::SongActions>,
+    album_actions: Option<album::AlbumActions>,
+    album_view: Option<crate::catalog::album::AlbumRef>,
+    playlist_view: Option<crate::catalog::playlist::PlaylistRef>,
+    playlist_dialog: Option<playlists::PlaylistDialog>,
+    playlist_target: Option<ipc::PlaylistWriteSource>,
+    queue_rows: Vec<crate::queue::QueueEntry>,
+    queue_upcoming: Vec<u64>,
     nav: usize,
     items: Vec<Track>,
     next: Option<String>,
@@ -162,6 +174,13 @@ impl App {
             sidebar: false,
             control_focus: None,
             song_actions: None,
+            album_actions: None,
+            album_view: None,
+            playlist_view: None,
+            playlist_dialog: None,
+            playlist_target: None,
+            queue_rows: Vec::new(),
+            queue_upcoming: Vec::new(),
             nav: 1,
             items: Vec::new(),
             next: None,
@@ -258,6 +277,15 @@ impl App {
                 self.queue_view_revision = None;
             }
         }
+        if let Some(write) = &status.playlist_write
+            && self
+                .status
+                .as_ref()
+                .and_then(|s| s.playlist_write.as_ref())
+                .is_none_or(|old| old.id != write.id || old.phase != write.phase)
+        {
+            self.note = format!("Playlist write {}: {}", write.phase, write.message);
+        }
         self.status = Some(status);
         (self.screen == 7 && changed).then(|| self.page_request())
     }
@@ -266,7 +294,7 @@ impl App {
             self.inspected_track
                 .as_ref()
                 .or_else(|| self.status.as_ref()?.playback.track.as_ref())
-        } else if matches!(self.screen, 2..=5 | 7) {
+        } else if matches!(self.screen, 2..=7) {
             self.items.get(self.selected)
         } else {
             self.status.as_ref()?.playback.track.as_ref()
@@ -333,7 +361,18 @@ impl App {
             Request::Browse {
                 kind: self.kind.clone(),
                 term: self.query.clone(),
-                next: None,
+                next: if let Some(playlist) = self
+                    .playlist_view
+                    .as_ref()
+                    .filter(|_| self.kind.starts_with("open:library-playlists:"))
+                {
+                    Some(format!("music:{}:0", playlist.storefront))
+                } else {
+                    self.album_view
+                        .as_ref()
+                        .filter(|_| self.kind.starts_with("open:albums:"))
+                        .map(|album| format!("{}:{}:0", album.provider, album.storefront))
+                },
             }
         }
     }
@@ -341,13 +380,21 @@ impl App {
         if screen != 8 {
             self.inspected_track = None;
         }
-        if screen != 8 {
+        if screen != 8 && !(screen == 6 && self.playlist_target.is_some()) {
             self.back_stack.clear();
         }
         self.screen = screen;
         self.nav = screen;
         self.control_focus = None;
         self.song_actions = None;
+        self.album_actions = None;
+        self.album_view = None;
+        self.playlist_view = None;
+        self.playlist_dialog = None;
+        if screen != 6 {
+            self.playlist_target = None;
+        }
+        self.queue_rows.clear();
         self.selected = 0;
         self.items.clear();
         self.next = None;
@@ -378,7 +425,7 @@ impl App {
             self.note =
                 "Public Apple catalog · type a query, Tab changes type, Enter searches".into();
         }
-        matches!(screen, 3 | 7).then(|| self.page_request())
+        matches!(screen, 3 | 6 | 7).then(|| self.page_request())
     }
 
     fn command(&mut self) -> Result<Option<Request>> {
@@ -401,7 +448,20 @@ impl App {
             "next" => Request::Next,
             "previous" => Request::Previous,
             "mute" => Request::Mute,
-            "clear" => Request::Clear,
+            "clear" => ipc::queue_action(self.revision(), ipc::QueueAction::ClearUpcoming),
+            "undo" => ipc::queue_action(self.revision(), ipc::QueueAction::Undo),
+            "stop" => Request::StopAudio,
+            "shutdown" => Request::Shutdown,
+            "retry" => Request::RetryOperation,
+            "cancel" => Request::CancelOperation(
+                self.status
+                    .as_ref()
+                    .and_then(|s| s.operation.as_ref())
+                    .context("No operation")?
+                    .id
+                    .clone(),
+            ),
+            "recover-state" => Request::RecoverState,
             "status" => Request::Status,
             "sleep" => Request::Sleep(
                 arg.parse::<u64>()
@@ -422,6 +482,16 @@ impl App {
                 self.config = c;
                 Request::Theme(arg.into())
             }
+            "playlists" => return Ok(self.go(6)),
+            "playlist-new" => {
+                self.playlist_name(false);
+                return Ok(None);
+            }
+            "playlist-save" => {
+                self.playlist_name(true);
+                return Ok(None);
+            }
+            "playlist-retry" => Request::RetryPlaylistWrite,
             "queue" => {
                 return Ok(self.go(7));
             }
@@ -480,6 +550,12 @@ impl App {
             }
             return Ok((false, None));
         }
+        if self.playlist_dialog.is_some() {
+            return Ok(self.playlist_menu_key(k.code));
+        }
+        if self.album_actions.is_some() {
+            return Ok(self.album_menu_key(k.code));
+        }
         if self.song_actions.is_some() {
             return Ok(self.song_menu_key(k.code));
         }
@@ -505,6 +581,9 @@ impl App {
                         self.sidebar = false;
                         self.control_focus = None;
                         self.items.clear();
+                        self.album_view = None;
+                        self.playlist_view = None;
+                        self.playlist_target = None;
                         self.next = None;
                         self.previous = None;
                         self.catalog_offset = 0;
@@ -541,6 +620,67 @@ impl App {
                 _ => {}
             }
             return Ok((false, None));
+        }
+        if self.input == Input::None && !self.sidebar {
+            match k.code {
+                KeyCode::Char('a') if matches!(self.screen, 2..=6) => {
+                    if let Some(playlist) = self.selected_playlist() {
+                        self.playlist_dialog = Some(playlists::PlaylistDialog::Actions {
+                            playlist,
+                            selected: 0,
+                        });
+                    } else {
+                        self.open_album_actions();
+                    }
+                    return Ok((false, None));
+                }
+                KeyCode::Char('N') if self.screen == 6 => {
+                    self.playlist_name(false);
+                    return Ok((false, None));
+                }
+                KeyCode::Char('S') if matches!(self.screen, 6 | 7) => {
+                    self.playlist_name(true);
+                    return Ok((false, None));
+                }
+                KeyCode::Char('A') if self.screen == 6 => {
+                    if let Some(playlist) = self.selected_playlist() {
+                        if playlist.can_edit {
+                            self.playlist_confirm(
+                                ipc::PlaylistWriteSource::Queue {
+                                    revision: self.revision(),
+                                },
+                                crate::catalog::playlist_write::WriteAction::Add { playlist },
+                            );
+                        } else {
+                            self.note = "This playlist is read-only".into();
+                        }
+                    }
+                    return Ok((false, None));
+                }
+                KeyCode::Char('u') if self.screen == 7 => {
+                    return Ok((
+                        false,
+                        Some(ipc::queue_action(self.revision(), ipc::QueueAction::Undo)),
+                    ));
+                }
+                KeyCode::Char('c') => {
+                    if let Some(op) = self
+                        .status
+                        .as_ref()
+                        .and_then(|s| s.operation.as_ref())
+                        .filter(|o| o.phase == "preparing")
+                    {
+                        return Ok((false, Some(Request::CancelOperation(op.id.clone()))));
+                    }
+                }
+                KeyCode::F(5) if self.screen == 6 => {
+                    return Ok((false, Some(self.page_request())));
+                }
+                KeyCode::Char('R') if self.screen != 8 => {
+                    return Ok((false, Some(Request::RetryOperation)));
+                }
+                _ => {}
+            }
         }
         let action = keys::action_for(k, &self.config.keybindings);
         if self.screen == 9
@@ -696,11 +836,25 @@ impl App {
                 } else if self.screen == 11 {
                     return Ok(self.settings_action());
                 } else if let Some(track) = self.items.get(self.selected).cloned() {
-                    if track.kind == "songs" || track.kind == "library-songs" {
+                    if track.kind == "library-playlists" && self.playlist_target.is_some() {
+                        let playlist = self.selected_playlist().expect("playlist row");
+                        if !playlist.can_edit {
+                            self.note =
+                                "This playlist is read-only; choose an editable destination".into();
+                            return Ok((false, None));
+                        }
+                        let source = self.playlist_target.take().expect("destination source");
+                        self.playlist_confirm(
+                            source,
+                            crate::catalog::playlist_write::WriteAction::Add { playlist },
+                        );
+                    } else if track.kind == "songs" || track.kind == "library-songs" {
                         self.open_song_actions(track);
                     } else {
                         self.remember_view();
                         self.catalog_offset = 0;
+                        self.playlist_view = self.selected_playlist();
+                        self.album_view = self.selected_album();
                         self.kind = format!("open:{}:{}", track.kind, track.id);
                         self.query.clear();
                         self.selected = 0;
@@ -714,10 +868,26 @@ impl App {
             }
             Some("enqueue") | Some("play_next") => {
                 if let Some(track) = self.items.get(self.selected).cloned() {
-                    req = Some(Request::Enqueue {
-                        track,
-                        next: action == Some("play_next"),
-                        play: false,
+                    req = Some(if track.kind == "library-playlists" {
+                        self.playlist_request(
+                            self.selected_playlist().expect("playlist row"),
+                            if action == Some("play_next") {
+                                ipc::ContextAction::PlayNext
+                            } else {
+                                ipc::ContextAction::Append
+                            },
+                        )
+                    } else if track.kind == "albums" {
+                        self.album_request(
+                            self.selected_album().expect("album selected"),
+                            if action == Some("play_next") {
+                                ipc::AlbumAction::PlayNext
+                            } else {
+                                ipc::AlbumAction::Append
+                            },
+                        )
+                    } else {
+                        self.song_request(track, if action == Some("play_next") { 3 } else { 1 })
                     });
                 }
             }
@@ -745,7 +915,7 @@ impl App {
                     self.items.clear();
                     self.queue_view_revision = None;
                     req = Some(self.page_request());
-                } else if matches!(self.screen, 2..=5) {
+                } else if matches!(self.screen, 2..=6) {
                     let previous = self.previous.clone().or_else(|| {
                         (self.catalog_offset > 0).then(|| {
                             self.catalog_offset
@@ -776,7 +946,7 @@ impl App {
                         self.queue_view_revision = None;
                         req = Some(self.page_request());
                     }
-                } else if let Some(next) = self.next.take() {
+                } else if let Some(next) = self.next.clone() {
                     req = Some(Request::Browse {
                         kind: self.kind.clone(),
                         term: self.query.clone(),
@@ -894,11 +1064,29 @@ impl App {
                     return Ok(());
                 }
                 self.queue_view_revision = revision;
-                self.items = serde_json::from_value(value["items"].clone())?;
+                self.queue_rows = serde_json::from_value(value["items"].clone())?;
+                self.queue_upcoming = value
+                    .get("upcoming")
+                    .map(|v| serde_json::from_value(v.clone()))
+                    .transpose()?
+                    .unwrap_or_default();
+                self.items = self.queue_rows.iter().map(|e| e.track.clone()).collect();
                 self.selected = self.selected.min(self.items.len().saturating_sub(1));
             }
             Request::History => {
                 self.note = serde_json::from_value::<Vec<String>>(value)?.join("  ·  ")
+            }
+            Request::PlaylistWrite { .. } | Request::RetryPlaylistWrite => {
+                // Subscription owns write progress. A delayed acknowledgement can be
+                // older than a completed/uncertain event on the other socket.
+                if self
+                    .status
+                    .as_ref()
+                    .and_then(|s| s.playlist_write.as_ref())
+                    .is_none_or(|w| w.phase == "preparing")
+                {
+                    self.note = "Account write accepted; waiting for service status".into();
+                }
             }
             _ => {
                 match r {
@@ -929,6 +1117,8 @@ impl App {
     pub fn render(&self, f: &mut Frame) {
         self.render_base(f);
         self.render_song_menu(f, palette(&self.config));
+        self.render_album_menu(f, palette(&self.config));
+        self.render_playlist_dialog(f, palette(&self.config));
         if self.token_input.is_some() {
             let a = f.area();
             let w = a.width.min(70);
@@ -955,7 +1145,10 @@ impl App {
             return;
         }
         if matches!(self.screen, 1 | 8) && !self.sidebar && area.height < 8 {
-            f.render_widget(Paragraph::new("RUSTUNE · L login · q quit"), area);
+            f.render_widget(
+                Paragraph::new(format!("RUSTUNE\n{}", self.status_message())),
+                area,
+            );
             return;
         }
         if matches!(self.screen, 1 | 8) && !self.sidebar {
@@ -1162,7 +1355,13 @@ impl App {
                 .gauge_style(Style::default().fg(p.accent).bg(p.panel)),
             progress,
         );
-        let text = if self.input != Input::None {
+        let text = if self
+            .status
+            .as_ref()
+            .is_some_and(|s| s.audio_error.is_some())
+        {
+            self.status_message()
+        } else if self.input != Input::None {
             format!(
                 "{}{}{}",
                 if self.input == Input::Command {
@@ -1178,7 +1377,7 @@ impl App {
                 }
             )
         } else {
-            format!(" {}", self.note)
+            format!(" {}", self.status_message())
         };
         f.render_widget(
             Paragraph::new(text).style(Style::default().fg(p.accent).bg(p.panel)),
@@ -1194,11 +1393,6 @@ impl App {
             self.render_settings(f, a, p);
             return;
         }
-        if self.screen == 6 {
-            f.render_widget(Paragraph::new("PERSONAL ACCOUNT · UNAVAILABLE\n\nPlaylist browsing is not implemented. Use Library or Search → My library for your private songs.\n\nUse Search for the public Apple catalog. ←/Esc returns to the menu.").wrap(Wrap{trim:false}),a);
-            return;
-        }
-
         if self.screen == 8 {
             player::render_lyrics(self, f, a, p);
             return;
@@ -1215,22 +1409,60 @@ impl App {
         };
         if matches!(self.screen, 2..=7) {
             let title = if self.screen == 7 {
-                "QUEUE · Enter actions · PgUp/PgDn pages".into()
+                format!(
+                    "QUEUE · shuffle {} · repeat {:?} · next #{}\nEnter actions · PgUp/PgDn pages · :clear upcoming · u Undo · :stop",
+                    if self.status.as_ref().is_some_and(|s| s.shuffle) {
+                        "on"
+                    } else {
+                        "off"
+                    },
+                    self.status
+                        .as_ref()
+                        .map_or(crate::model::Repeat::Off, |s| s.repeat),
+                    self.status
+                        .as_ref()
+                        .and_then(|s| s.next_entry_id)
+                        .map_or("—".into(), |id| id.to_string())
+                )
+            } else if self.kind.starts_with("open:library-playlists:") {
+                "PLAYLIST TRACKS · a Whole playlist actions · Enter Song actions".into()
+            } else if self.screen == 6 {
+                format!(
+                    "{} · a Actions · N New · S Save queue · A Add queue · F5 Refresh",
+                    if self.playlist_target.is_some() {
+                        "CHOOSE EDITABLE DESTINATION"
+                    } else {
+                        "MY PLAYLISTS"
+                    }
+                )
             } else if self.kind.starts_with("open:albums:") {
-                "ALBUM TRACKS".into()
+                "ALBUM TRACKS · a Album actions (whole album) · Enter Song actions".into()
             } else if self.kind.starts_with("open:artists:") {
                 "ARTIST ALBUMS".into()
             } else if matches!(self.screen, 2 | 4 | 5) {
                 format!(
                     "SEARCH  {}  ·  {}",
                     ["songs", "albums", "artists", "My library"][self.search_type],
-                    self.query
+                    format_args!("{} · a Album actions", self.query)
                 )
             } else {
                 self.kind.to_uppercase()
             };
-            let [header, list] =
-                Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).areas(a);
+            let write = self
+                .status
+                .as_ref()
+                .and_then(|s| s.playlist_write.as_ref())
+                .filter(|_| matches!(self.screen, 6 | 7));
+            let title = if let Some(write) = write {
+                format!("{title}\nAccount write {}: {}", write.phase, write.message)
+            } else {
+                title
+            };
+            let [header, list] = Layout::vertical([
+                Constraint::Length(if write.is_some() { 3 } else { 2 }),
+                Constraint::Fill(1),
+            ])
+            .areas(a);
             f.render_widget(
                 Paragraph::new(title).style(Style::default().fg(p.accent).bold()),
                 header,
@@ -1256,12 +1488,72 @@ impl App {
                         Span::styled(
                             format!(
                                 "{} {:>3}  ",
-                                if i == self.selected { "›" } else { " " },
+                                if self.screen == 7
+                                    && self.status.as_ref().and_then(|s| s.current_entry_id)
+                                        == self.queue_rows.get(i).map(|e| e.entry_id)
+                                {
+                                    "▶"
+                                } else if i == self.selected {
+                                    "›"
+                                } else {
+                                    " "
+                                },
                                 i + 1 + self.queue_offset
                             ),
                             Style::default().fg(p.muted),
                         ),
-                        Span::raw(format!("{}  ", t.title)),
+                        Span::raw(if self.screen == 7 {
+                            self.queue_rows
+                                .get(i)
+                                .map(|e| {
+                                    if self.status.as_ref().and_then(|s| s.current_entry_id)
+                                        == Some(e.entry_id)
+                                    {
+                                        "[now] ".into()
+                                    } else if let Some(rank) =
+                                        self.queue_upcoming.iter().position(|id| *id == e.entry_id)
+                                    {
+                                        format!("[next {}] ", rank + 1)
+                                    } else {
+                                        "[past] ".into()
+                                    }
+                                })
+                                .unwrap_or_default()
+                        } else {
+                            String::new()
+                        }),
+                        Span::raw(format!(
+                            "{}{}  ",
+                            if t.kind == "library-playlists" {
+                                format!(
+                                    "{} [{}]",
+                                    t.title,
+                                    if t.can_edit == Some(true) {
+                                        "editable"
+                                    } else {
+                                        "read-only"
+                                    }
+                                )
+                            } else {
+                                t.title.clone()
+                            },
+                            if self.screen == 7 {
+                                self.queue_rows
+                                    .get(i)
+                                    .map(|e| {
+                                        format!(
+                                            " · [{} {} {}] #{}",
+                                            e.context.provider,
+                                            e.context.storefront,
+                                            e.context.title,
+                                            e.entry_id
+                                        )
+                                    })
+                                    .unwrap_or_default()
+                            } else {
+                                String::new()
+                            }
+                        )),
                         Span::styled(
                             format!(
                                 "{}  {}",
@@ -1292,7 +1584,7 @@ impl App {
 
             10=>format!("AUDIO SETTINGS\n\n● Auto               Backend chooses stream quality\n○ Data Saver         Unavailable\n○ Standard           Unavailable\n○ High Quality       Unavailable\n○ Lossless           Unavailable\n○ Hi-Res Lossless    Unavailable\n\nBackend: {}\n{}\n\nSource codec/rate/channels are reported above when active.\nSource bit depth    Unknown\nBuffer status       Device clock\n\nQuality is shown only when a native backend reports reliable source fields.\nPipeWire output format does not establish source quality.",self.status.as_ref().map_or("No playback process",|s|s.backend.as_str()),self.status.as_ref().map_or("Source quality unknown".into(),|s|s.playback.quality_label())),
             11=>format!("SETTINGS\n\nTheme: {}\nResources: {:?}\n\n:theme dark | light | catppuccin_mocha | catppuccin_latte\n:theme gruvbox | nord | monochrome | tokyo_night | custom\n:profile minimal | balanced | enhanced\n\n~/.config/rustune/config.toml\nKeybindings, custom colors, notifications, mouse\nand daemon behavior can be configured there.\n\n:login  :logout  :sleep MINUTES  :clear  :history\nDaemon mode keeps playback running when the TUI closes.",self.config.theme,self.status.as_ref().map_or(self.config.performance,|s|s.profile)),
-            _=>{let mut s="HELP · DEFAULT BINDINGS\n\n".to_owned();for (action,key) in keys::DEFAULTS {s.push_str(&format!("{key:<12}{action}   "));if s.lines().last().is_some_and(|l|l.len()>65){s.push('\n');}}s.push_str("\n\n←/Esc menu · ↑/↓ choose · Enter/→ open. Tab cycles focus.\nSongs: Enter opens actions. Settings: ↑/↓ then Enter changes a value.\nSearch: Tab/F2 changes songs/albums/artists/My library. PgUp/PgDn changes pages.\nEQ: e opens; ↑/↓ selects; ←/→ edits; b bypasses; r resets.\n← returns from an album or lyrics to previous results. Alt-←/→ seeks.\nQueue: Delete removes; J/K reorder; :clear clears.\nCommands: :login :logout :profile MODE :theme NAME\n:sleep MINUTES :recent :history :queue :audio :help\nCtrl-C always exits. ~/.config/rustune/config.toml customizes bindings.");s}
+            _=>{let mut s="HELP · DEFAULT BINDINGS\n\n".to_owned();for (action,key) in keys::DEFAULTS {s.push_str(&format!("{key:<12}{action}   "));if s.lines().last().is_some_and(|l|l.len()>65){s.push('\n');}}s.push_str("\n\n←/Esc menu · ↑/↓ choose · Enter/→ open. Tab cycles focus.\nAlbums: Enter opens; a opens whole-album actions. Songs: Enter opens actions. Settings: ↑/↓ then Enter changes a value.\nSearch: Tab/F2 changes songs/albums/artists/My library. PgUp/PgDn changes pages.\nEQ: e opens; ↑/↓ selects; ←/→ edits; b bypasses; r resets.\n← returns from an album or lyrics to previous results. Alt-←/→ seeks.\nQueue: Delete removes and advances; J/K reorder; :clear upcoming; u Undo.\nCommands: :stop :undo :cancel :retry :login :logout :profile MODE :theme NAME\n:sleep MINUTES :recent :history :queue :audio :help\nCtrl-C always exits. ~/.config/rustune/config.toml customizes bindings.");s}
         };
         f.render_widget(
             Paragraph::new(text)
@@ -1320,7 +1612,7 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
     app.status = Some(serde_json::from_value(
         ipc::request(&paths, &Request::Status).await?,
     )?);
-    let (jobs, mut work) = mpsc::channel::<Request>(8);
+    let (jobs, work) = mpsc::channel::<Request>(8);
     let (done, mut responses) = mpsc::channel(8);
     let worker_paths = paths.clone();
     let auth_paths = paths.clone();
@@ -1340,14 +1632,7 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
             }
         }
     });
-    let worker = tokio::spawn(async move {
-        while let Some(r) = work.recv().await {
-            let result = ipc::request(&worker_paths, &r).await;
-            if done.send((r, result)).await.is_err() {
-                break;
-            }
-        }
-    });
+    let worker = tokio::spawn(runtime::requests(worker_paths, work, done));
     let (updates, mut status) = mpsc::channel::<Result<Status>>(1);
     let subscription = tokio::spawn(async move {
         let result = async {
@@ -1368,6 +1653,10 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
             let _ = updates.send(Err(e)).await;
         }
     });
+    // Fullscreen pixels need their RGB foreground/background pairs, including
+    // with the monochrome UI theme. Inherited NO_COLOR otherwise turns covers
+    // into unrecognizable block glyphs. This only affects the TUI process.
+    crossterm::style::force_color_output(true);
     let mut terminal = ratatui::init();
     let (artwork_jobs, mut covers, artwork_worker) = artwork::worker();
     let mut last_artwork = None;
@@ -1397,10 +1686,10 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                 event=events.next()=>{
                     let Some(event)=event else{break;};let event=event?;let mut request=None;
                     match event {
-                        Event::Paste(text)=>{if let Some(input)=app.token_input.as_mut(){input.append(&text);}else if app.input!=Input::None && app.text.len()+text.len()<=512 {app.text.extend(text.chars().filter(|c|!c.is_control()));}},
+                        Event::Paste(text)=>{if let Some(input)=app.token_input.as_mut(){input.append(&text);}else if app.playlist_dialog.is_some(){app.playlist_paste(&text);}else if app.input!=Input::None && app.text.len()+text.len()<=512 {app.text.extend(text.chars().filter(|c|!c.is_control()));}},
                         Event::Overflow=>{if let Some(input)=app.token_input.as_mut(){input.reject_paste();}app.note="Paste exceeds 16 KiB or is invalid. Ctrl-U clears token input.".into();},
                         Event::Key(k) if k.is_press()=>match app.key(k){Ok((quit,r))=>{if quit{break;}request=r;},Err(e)=>{app.note=e.to_string();app.input=Input::None;}},
-                        Event::Mouse(m) if app.token_input.is_none() && app.song_actions.is_none()=>match m.kind {
+                        Event::Mouse(m) if app.token_input.is_none() && app.song_actions.is_none() && app.playlist_dialog.is_none()=>match m.kind {
                             MouseEventKind::ScrollDown=>app.selected=(app.selected+1).min(app.items.len().saturating_sub(1)),
                             MouseEventKind::ScrollUp=>app.selected=app.selected.saturating_sub(1),
                             MouseEventKind::Down(MouseButton::Left) if matches!(app.screen,1|8) && !app.sidebar=>{
@@ -1419,7 +1708,7 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                 }
                 Some((r,result))=responses.recv()=>{
                     app.busy=false;
-                    if let Request::Browse {kind,term,..}=&r && (kind!=&app.kind || term!=&app.query || !matches!(app.screen,2..=5)) {continue;}
+                    if let Request::Browse {kind,term,..}=&r && (kind!=&app.kind || term!=&app.query || !matches!(app.screen,2..=6)) {continue;}
                     if let Request::QueuePage {offset}=&r && (app.screen!=7 || *offset!=app.queue_offset) {continue;}
                     match result {Ok(v)=>{if let Err(e)=app.accept(&r,v){app.note=e.to_string();}
                     if app.screen==7 && !matches!(r,Request::QueuePage{..}){let _=jobs.try_send(app.page_request());}},Err(e)=>{app.request_failed(&r);app.note=e.to_string();}}
@@ -1693,7 +1982,7 @@ mod login_tests {
     #[ignore = "visual QA export with public artwork and explicitly synthetic lyrics; no audio"]
     async fn export_player_layout_for_visual_review() {
         let mut app = App::new(Config::default());
-        let track=Track{id:"1445734224".into(),kind:"songs".into(),title:"Simple Man".into(),artist:"Lynyrd Skynyrd".into(),album:"Pronounced Leh-Nerd Skin-Nerd (Bonus Tracks)".into(),duration_ms:357933,url:None,artwork:Some("https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/1e/5c/85/1e5c85bb-2b43-3057-da09-39446321a191/06UMGIM14960.rgb.jpg/{w}x{h}bb.jpg".into())};
+        let track=Track{id:"1445734224".into(),kind:"songs".into(),title:"Simple Man".into(),artist:"Lynyrd Skynyrd".into(),album:"Pronounced Leh-Nerd Skin-Nerd (Bonus Tracks)".into(),duration_ms:357933,url:None,artwork:Some("https://is1-ssl.mzstatic.com/image/thumb/Music115/v4/1e/5c/85/1e5c85bb-2b43-3057-da09-39446321a191/06UMGIM14960.rgb.jpg/{w}x{h}bb.jpg".into()),..Track::default()};
         app.status=Some(serde_json::from_value(serde_json::json!({"playback":{"track":track,"position":262.0,"duration":357.933,"volume":0.7},"queue_len":1,"current":0,"repeat":"off","shuffle":false,"profile":"balanced","pid":1,"browser_pid":null,"backend":"layout preview","playback_available":false,"browser_shared":false,"uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null})).unwrap());
         app.note = "LAYOUT PREVIEW · no audio · synthetic text · real public album artwork".into();
         let (jobs, mut results, worker) = artwork::worker();

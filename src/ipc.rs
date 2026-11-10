@@ -5,6 +5,34 @@ pub const MAX_FRAME: usize = 4 * 1024 * 1024;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "command", content = "args", rename_all = "snake_case")]
 pub enum Request {
+    QueueAction {
+        key: String,
+        revision: u64,
+        action: QueueAction,
+    },
+    Album {
+        key: String,
+        revision: u64,
+        album: crate::catalog::album::AlbumRef,
+        action: AlbumAction,
+    },
+    Playlist {
+        key: String,
+        revision: u64,
+        playlist: crate::catalog::playlist::PlaylistRef,
+        action: ContextAction,
+    },
+    PlaylistWrite {
+        key: String,
+        source: PlaylistWriteSource,
+        action: crate::catalog::playlist_write::WriteAction,
+    },
+    RetryPlaylistWrite,
+    CancelOperation(String),
+    RetryOperation,
+    StopAudio,
+    Shutdown,
+    RecoverState,
     Equalizer(rustune_core::equalizer::EqSettings),
     Status,
     Subscribe,
@@ -91,4 +119,80 @@ pub async fn request(paths: &crate::config::Paths, request: &Request) -> Result<
     tokio::time::timeout(std::time::Duration::from_secs(55), operation)
         .await
         .map_err(|_| anyhow::anyhow!("service timed out"))?
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "intent", rename_all = "snake_case")]
+pub enum QueueAction {
+    PlayContext {
+        tracks: Vec<crate::model::Track>,
+        context: crate::queue::QueueContext,
+        start: usize,
+        shuffle: bool,
+    },
+    PlayEntry {
+        entry_id: u64,
+    },
+    PlayNext {
+        tracks: Vec<crate::model::Track>,
+        context: crate::queue::QueueContext,
+    },
+    Append {
+        tracks: Vec<crate::model::Track>,
+        context: crate::queue::QueueContext,
+    },
+    RemoveAndAdvance {
+        entry_id: u64,
+    },
+    Move {
+        entry_id: u64,
+        before: Option<u64>,
+    },
+    MoveBy {
+        entry_id: u64,
+        delta: i8,
+    },
+    ClearUpcoming,
+    Undo,
+    SetShuffle {
+        enabled: bool,
+    },
+    SetRepeat {
+        repeat: crate::model::Repeat,
+    },
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "intent", rename_all = "snake_case")]
+pub enum ContextAction {
+    PlayFromPosition {
+        source_index: usize,
+        shuffle: bool,
+    },
+    Play {
+        #[serde(default)]
+        start_song: Option<String>,
+        shuffle: bool,
+    },
+    PlayNext,
+    Append,
+}
+pub type AlbumAction = ContextAction;
+pub fn operation_key() -> String {
+    format!("{:016x}{:016x}", fastrand::u64(..), fastrand::u64(..))
+}
+pub fn queue_action(revision: u64, action: QueueAction) -> Request {
+    Request::QueueAction {
+        key: operation_key(),
+        revision,
+        action,
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum PlaylistWriteSource {
+    Queue { revision: u64 },
+    Entry { revision: u64, entry_id: u64 },
+    Track { track: Box<crate::model::Track> },
+    Empty,
 }

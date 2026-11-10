@@ -19,7 +19,7 @@ struct Root {
 impl Root {
     async fn raise(&self) {}
     async fn quit(&self) -> fdo::Result<()> {
-        control(&self.tx, Request::Stop).await
+        control(&self.tx, Request::Shutdown).await
     }
     #[zbus(property)]
     fn can_quit(&self) -> bool {
@@ -62,15 +62,8 @@ async fn control(tx: &Sender, r: Request) -> fdo::Result<()> {
 }
 fn track_path(state: &Status) -> OwnedObjectPath {
     let id = state
-        .playback
-        .track
-        .as_ref()
-        .map(|t| t.id.as_str())
-        .unwrap_or("none");
-    let id: String = id
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect();
+        .current_entry_id
+        .map_or("none".into(), |id| id.to_string());
     OwnedObjectPath::try_from(format!("/org/mpris/MediaPlayer2/track/{id}"))
         .expect("sanitized MPRIS object path")
 }
@@ -89,7 +82,7 @@ impl Player {
         control(&self.tx, Request::Toggle).await
     }
     async fn stop(&self) -> fdo::Result<()> {
-        control(&self.tx, Request::Pause).await
+        control(&self.tx, Request::StopAudio).await
     }
     async fn play(&self) -> fdo::Result<()> {
         control(&self.tx, Request::Play).await
@@ -123,7 +116,7 @@ impl Player {
         let s = self.state.borrow();
         if s.playback.playing {
             "Playing"
-        } else if s.playback.track.is_some() {
+        } else if s.playback.phase == crate::model::PlaybackPhase::Paused {
             "Paused"
         } else {
             "Stopped"
@@ -239,14 +232,12 @@ impl Player {
     #[zbus(property)]
     fn can_go_next(&self) -> bool {
         let s = self.state.borrow();
-        s.start_available
-            && (s.current.is_some_and(|i| i + 1 < s.queue_len)
-                || (s.queue_len > 0 && (s.shuffle || s.repeat == Repeat::All)))
+        s.start_available && s.can_next
     }
     #[zbus(property)]
     fn can_go_previous(&self) -> bool {
         let s = self.state.borrow();
-        s.start_available && s.current.is_some_and(|i| i > 0)
+        s.start_available && s.can_previous
     }
     #[zbus(property)]
     fn can_play(&self) -> bool {
@@ -276,9 +267,21 @@ impl Player {
 
 pub async fn start(
     tx: Sender,
-    mut state: watch::Receiver<Status>,
+    state: watch::Receiver<Status>,
 ) -> zbus::Result<(Connection, tokio::task::JoinHandle<()>)> {
-    let connection = zbus::connection::Builder::session()
+    start_at(tx, state, None).await
+}
+pub(crate) async fn start_at(
+    tx: Sender,
+    mut state: watch::Receiver<Status>,
+    address: Option<&str>,
+) -> zbus::Result<(Connection, tokio::task::JoinHandle<()>)> {
+    let builder = if let Some(address) = address {
+        zbus::connection::Builder::address(address)
+    } else {
+        zbus::connection::Builder::session()
+    };
+    let connection = builder
         .name("org.mpris.MediaPlayer2.rustune")
         .serve_at(PATH, Root { tx: tx.clone() })
         .serve_at(
@@ -299,11 +302,14 @@ pub async fn start(
                 let player = interface.get().await;
                 let emitter = interface.signal_emitter();
                 if old.playback.playing != new.playback.playing
+                    || old.playback.phase != new.playback.phase
                     || old.playback.track != new.playback.track
                 {
                     let _ = player.playback_status_changed(emitter).await;
                 }
-                if old.playback.track != new.playback.track {
+                if old.playback.track != new.playback.track
+                    || old.current_entry_id != new.current_entry_id
+                {
                     let _ = player.metadata_changed(emitter).await;
                 }
                 if (old.playback.volume - new.playback.volume).abs() > 0.001 {
@@ -314,6 +320,27 @@ pub async fn start(
                 }
                 if old.repeat != new.repeat {
                     let _ = player.loop_status_changed(emitter).await;
+                }
+                if old.can_next != new.can_next || old.start_available != new.start_available {
+                    let _ = player.can_go_next_changed(emitter).await;
+                }
+                if old.can_previous != new.can_previous
+                    || old.start_available != new.start_available
+                {
+                    let _ = player.can_go_previous_changed(emitter).await;
+                }
+                if old.audio_pid != new.audio_pid
+                    || old.start_available != new.start_available
+                    || old.queue_len != new.queue_len
+                    || old.playback.phase != new.playback.phase
+                {
+                    let _ = player.can_play_changed(emitter).await;
+                    let _ = player.can_pause_changed(emitter).await;
+                    let _ = player.can_control_changed(emitter).await;
+                }
+                if old.audio_pid != new.audio_pid || old.playback.duration != new.playback.duration
+                {
+                    let _ = player.can_seek_changed(emitter).await;
                 }
                 if (new.playback.position - old.playback.position).abs() > 3.0 {
                     let _ =
@@ -342,6 +369,20 @@ mod capability_tests {
             assert_eq!(player.can_pause(), can_pause);
             assert_eq!(player.can_seek(), can_pause);
         }
+    }
+    #[test]
+    fn stopped_metadata_and_duplicate_song_occurrences_use_session_state() {
+        let status:Status=serde_json::from_value(serde_json::json!({"playback":{"phase":"failed","track":{"id":"same"}},"queue_len":2,"current":0,"current_entry_id":17,"can_next":false,"can_previous":true,"repeat":"all","shuffle":true,"profile":"balanced","pid":1,"browser_pid":null,"start_available":true,"backend":"native","browser_shared":false,"playback_available":true,"uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null})).unwrap();
+        let (tx, _) = tokio::sync::mpsc::channel(1);
+        let (_, state) = watch::channel(status.clone());
+        let player = Player { tx, state };
+        assert_eq!(player.playback_status(), "Stopped");
+        assert!(!player.can_go_next());
+        assert!(player.can_go_previous());
+        let first = track_path(&status);
+        let mut other = status;
+        other.current_entry_id = Some(18);
+        assert_ne!(first, track_path(&other));
     }
     #[test]
     fn disabled_engine_does_not_advertise_restored_queue_as_playable() {

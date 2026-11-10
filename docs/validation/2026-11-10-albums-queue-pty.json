@@ -1,0 +1,21 @@
+{
+  "checks": [
+    "legacy duplicates migrate to distinct occurrences without autoplay",
+    "keyboard Queue Play uses occurrence; async Failed is visible",
+    "clear upcoming and one-step undo preserve session and modes, no autoplay",
+    "second-client occurrence move, stale-edit rejection and idempotent retry",
+    "four PTY sizes; clean quit restores terminal",
+    "durable ordered state, backup and restart without autoplay"
+  ],
+  "actual_audio_verified": false,
+  "sample_seconds": 2.0000809180000942,
+  "cpu_percent": 0.0,
+  "owned_processes": 2,
+  "exited_during_sample": 0,
+  "browser_processes": 0,
+  "audio_processes": 0,
+  "rss_kib": 17720,
+  "pss_kib": 8470,
+  "binary_sha256": "434d434aa007bb7f27506798922b8b073561ff055ad05a6fd06e9877f6730db4",
+  "audio_binary_sha256": "f9ec8370dbee1689c1c2087a967fe7b8a927aeb0a65a03af9a8547bac63eb48c"
+}

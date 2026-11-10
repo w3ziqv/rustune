@@ -4,6 +4,14 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct Track {
     pub id: String,
+    pub provider: String,
+    pub storefront: String,
+    pub album_id: Option<String>,
+    pub source_index: Option<usize>,
+    pub can_edit: Option<bool>,
+    pub disc_number: Option<u32>,
+    pub track_number: Option<u32>,
+    pub unavailable: Option<String>,
     pub kind: String,
     pub title: String,
     pub artist: String,
@@ -25,6 +33,7 @@ pub enum Repeat {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Playback {
+    pub phase: PlaybackPhase,
     pub authorized: bool,
     pub playing: bool,
     pub state: u32,
@@ -67,6 +76,10 @@ impl Playback {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Page {
     pub items: Vec<Track>,
+    #[serde(default)]
+    pub skipped: Vec<crate::catalog::album::Skipped>,
+    #[serde(default)]
+    pub total: Option<usize>,
     pub next: Option<String>,
     #[serde(default)]
     pub previous: Option<String>,
@@ -88,4 +101,16 @@ pub enum Quality {
 }
 pub fn quality_supported(quality: Quality) -> bool {
     quality == Quality::Auto
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackPhase {
+    #[default]
+    Stopped,
+    Preparing,
+    Playing,
+    Paused,
+    Ended,
+    Failed,
 }

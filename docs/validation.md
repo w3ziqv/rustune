@@ -1,5 +1,23 @@
 # Validation
 
+## Albums, queue and playlists — v0.2.0, 2026-11-10
+
+The release adds complete ordered album/playlist playback, stable queue occurrences,
+transactional queue migration and private playlist creation/export/append. It also
+fixes RGB artwork when the terminal inherits NO_COLOR. See the detailed
+[queue](validation/2026-11-10-albums-queue.md),
+[artwork](validation/2026-11-10-artwork-display.md) and
+[playlist](validation/2026-11-10-playlists.md) validation reports.
+
+The final feature suite passed 172 tests (3 explicit network/visual opt-ins),
+format, Clippy and release build. Separate online artwork/lyrics and isolated
+PTY checks passed; queue integration traversed every controlled EOF of a 45-track
+context, with additional 225-track paging fixtures. Real-account playlist listing
+and track browsing were verified read-only, and the user accepted the test version.
+Create/append account writes were fixture-tested; no automated real-account POST
+was performed. The subscribed complete-song evidence below belongs to the earlier
+native-backend revision and is not a new full-song claim for v0.2.0.
+
 ## RAM, native equalizer and account search — 2026-11-10
 
 Current workspace checks passed on stable Rust1.99.1: format, Clippy with warnings

@@ -264,7 +264,9 @@ pub(super) fn render(app: &App, f: &mut Frame, p: Palette) {
             *area,
         );
     }
-    let status = if app.input != super::Input::None {
+    let status = if app.status.as_ref().is_some_and(|s| s.audio_error.is_some()) {
+        app.status_message()
+    } else if app.input != super::Input::None {
         format!(
             "{}{}",
             if app.input == super::Input::Command {
@@ -275,7 +277,7 @@ pub(super) fn render(app: &App, f: &mut Frame, p: Palette) {
             app.text
         )
     } else {
-        app.note.clone()
+        app.status_message()
     };
     f.render_widget(Paragraph::new(status), a.status);
 }
