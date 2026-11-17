@@ -1,5 +1,5 @@
 //! The selected player composition: cover left, metadata/lyrics right, controls below.
-use super::{App, Palette, time, visible_range};
+use super::{App, Focus, Palette, Screen, navigation, time, visible_range};
 use crate::{keys, lyrics::LyricsState};
 use ratatui::{
     Frame,
@@ -8,7 +8,6 @@ use ratatui::{
     text::Line,
     widgets::{Block, Gauge, Paragraph, Wrap},
 };
-use unicode_width::UnicodeWidthChar;
 
 pub(super) const ACTIONS: [&str; 7] = [
     "toggle",
@@ -19,27 +18,7 @@ pub(super) const ACTIONS: [&str; 7] = [
     "mute",
     "quit",
 ];
-pub(super) fn lyric_rows(lyrics: &crate::lyrics::Lyrics, width: u16) -> Vec<(usize, &str)> {
-    let mut rows = Vec::new();
-    let width = usize::from(width.max(1));
-    for (line, lyric) in lyrics.lines.iter().enumerate() {
-        let mut start = 0;
-        let mut columns = 0;
-        for (i, c) in lyric.text.char_indices() {
-            let n = c.width().unwrap_or(0);
-            if columns + n > width && i > start {
-                rows.push((line, &lyric.text[start..i]));
-                start = i;
-                columns = 0;
-            }
-            columns += n;
-        }
-        rows.push((line, &lyric.text[start..]));
-    }
-    rows
-}
 pub(super) struct Areas {
-    pub header: Rect,
     pub cover: Option<Rect>,
     pub metadata: Rect,
     pub lyrics: Rect,
@@ -48,8 +27,8 @@ pub(super) struct Areas {
     pub status: Rect,
 }
 pub(super) fn areas(area: Rect, artwork: bool) -> Areas {
-    let [header, body, progress, controls, status] = Layout::vertical([
-        Constraint::Length(1),
+    let [_header, body, progress, controls, status] = Layout::vertical([
+        Constraint::Length(0),
         Constraint::Fill(1),
         Constraint::Length(2),
         Constraint::Length(3),
@@ -76,7 +55,6 @@ pub(super) fn areas(area: Rect, artwork: bool) -> Areas {
     let [metadata, lyrics] =
         Layout::vertical([Constraint::Length(6), Constraint::Fill(1)]).areas(right);
     Areas {
-        header,
         cover,
         metadata,
         lyrics,
@@ -101,29 +79,22 @@ fn art_enabled(app: &App) -> bool {
             > 0
 }
 pub(super) fn cover_size(app: &App, size: Size) -> Option<Size> {
-    areas(Rect::new(0, 0, size.width, size.height), art_enabled(app))
+    areas(navigation::layout(size, app.screen).main, art_enabled(app))
         .cover
         .map(|r| Size::new(r.width, r.height))
 }
 pub(super) fn lyrics_area(app: &App, size: Size) -> Rect {
-    areas(Rect::new(0, 0, size.width, size.height), art_enabled(app)).lyrics
+    let main = navigation::layout(size, app.screen).main;
+    if app.screen == Screen::Lyrics {
+        standalone_lyrics_areas(main)[1]
+    } else {
+        areas(main, art_enabled(app)).lyrics
+    }
 }
 
-pub(super) fn render(app: &App, f: &mut Frame, p: Palette) {
+pub(super) fn render(app: &App, f: &mut Frame, area: Rect, p: Palette) {
     let size = Size::new(f.area().width, f.area().height);
-    let a = areas(f.area(), art_enabled(app));
-    f.render_widget(
-        Paragraph::new(format!(
-            " RUSTUNE    [L {}]   [← Menu] [→ Controls] [Tab focus] [/ Search]",
-            if app.token_stored {
-                "Token saved, unverified"
-            } else {
-                "Save token"
-            }
-        ))
-        .style(Style::default().fg(p.fg).bold()),
-        a.header,
-    );
+    let a = areas(area, art_enabled(app));
     if let Some(cover) = a.cover {
         let key = app.artwork_request(size);
         let result = app
@@ -133,7 +104,9 @@ pub(super) fn render(app: &App, f: &mut Frame, p: Palette) {
         if let Some(image) = result.and_then(|r| r.image.as_ref()) {
             f.render_widget(ratatui_image::Image::new(image), cover);
         } else {
-            let text = if app.displayed_track().is_none() {
+            let text = if app.smooth_unavailable() {
+                "Smooth artwork unavailable.\nThis terminal needs Kitty/iTerm2 graphics and cell geometry.\nEnable pixelated artwork in Settings."
+            } else if app.displayed_track().is_none() {
                 "\nRUSTUNE\n\nNothing playing\n\n← Menu · → Controls\n/  Public search"
             } else if key.is_none() {
                 "\nNo artwork reported"
@@ -244,7 +217,7 @@ pub(super) fn render(app: &App, f: &mut Frame, p: Palette) {
             5 => "Mute",
             _ => "Quit",
         };
-        let focused = app.control_focus == Some(i);
+        let focused = app.focus == Focus::Player(i);
         let block = Block::bordered()
             .border_style(Style::default().fg(p.fg))
             .border_type(if focused {
@@ -264,9 +237,7 @@ pub(super) fn render(app: &App, f: &mut Frame, p: Palette) {
             *area,
         );
     }
-    let status = if app.status.as_ref().is_some_and(|s| s.audio_error.is_some()) {
-        app.status_message()
-    } else if app.input != super::Input::None {
+    let status = if app.input != super::Input::None {
         format!(
             "{}{}",
             if app.input == super::Input::Command {
@@ -318,7 +289,7 @@ pub(super) fn render_lyrics(app: &App, f: &mut Frame, area: Rect, p: Palette) {
     };
     let position = app.displayed_position();
     let active = lyrics.active_line(position);
-    let wrapped = lyric_rows(lyrics, area.width);
+    let wrapped = app.lyric_layout.rows(lyrics, area.width);
     let active_row = active
         .and_then(|index| wrapped.iter().position(|(line, _)| *line == index))
         .unwrap_or(0);
@@ -331,10 +302,11 @@ pub(super) fn render_lyrics(app: &App, f: &mut Frame, area: Rect, p: Palette) {
     };
     let rows: Vec<_> = range
         .map(|i| {
-            let (line, text) = wrapped[i];
+            let (line, range) = &wrapped[i];
+            let text = &lyrics.lines[*line].text[range.clone()];
             Line::from(text)
                 .alignment(Alignment::Center)
-                .style(if active == Some(line) {
+                .style(if active == Some(*line) {
                     Style::default()
                         .fg(p.fg)
                         .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
@@ -349,14 +321,26 @@ pub(super) fn render_lyrics(app: &App, f: &mut Frame, area: Rect, p: Palette) {
     );
     f.render_widget(
         Paragraph::new(format!(
-            "LRCLIB · {} · j/k scroll · R reload",
+            "LRCLIB · {} · {} follow · {} reload",
             if lyrics.synced {
                 "synced"
             } else {
                 "plain text"
-            }
+            },
+            app.config
+                .keybindings
+                .get("lyrics_follow")
+                .map_or("f", String::as_str),
+            app.config
+                .keybindings
+                .get("lyrics_refresh")
+                .map_or("R", String::as_str)
         ))
         .alignment(Alignment::Center),
         Rect::new(area.x, area.bottom() - 1, area.width, 1),
     );
+}
+
+pub(super) fn standalone_lyrics_areas(area: Rect) -> [Rect; 2] {
+    Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area)
 }

@@ -5,7 +5,7 @@ use crate::{
     ipc::{AlbumAction, QueueAction},
 };
 use persistence::{Receipt, STATE_VERSION, SavedState};
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Operation {
     pub id: String,
     pub phase: String,

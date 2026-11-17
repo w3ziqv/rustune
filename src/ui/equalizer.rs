@@ -159,7 +159,7 @@ mod tests {
     #[test]
     fn rapid_eq_edits_accumulate_and_failed_requests_restore_confirmed_settings() {
         let mut app = App::new(Config::default());
-        app.screen = 9;
+        app.screen = Screen::Equalizer;
         app.eq_selected = 2;
         app.equalizer_key(KeyCode::Right);
         let request = app.equalizer_key(KeyCode::Right).unwrap();
@@ -173,8 +173,8 @@ mod tests {
     #[test]
     fn arrows_edit_real_equalizer_gains_and_enter_bypasses_without_erasing_them() {
         let mut app = App::new(Config::default());
-        app.screen = 9;
-        app.sidebar = false;
+        app.screen = Screen::Equalizer;
+        app.focus = Focus::Content;
         app.eq_selected = 2;
         let request = app
             .equalizer_key(KeyCode::Right)

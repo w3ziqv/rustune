@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix='rustune-native-live-') as directory:
                     result+=part
                 return result
             size=struct.unpack('>I',read(4))[0];assert 0<size<=4*1024*1024
-            result=json.loads(read(size));assert result['ok'],result.get('error','service rejected command');return result['data']
+            result=json.loads(read(size));assert result['ok'],'service rejected command; private backend details withheld';return result['data']
     status=lambda:rpc('status')
     screen=pyte.Screen(142,39);stream=pyte.Stream(screen);decoder=codecs.getincrementaldecoder('utf8')('replace')
     def drain(seconds=.1):
@@ -66,7 +66,7 @@ with tempfile.TemporaryDirectory(prefix='rustune-native-live-') as directory:
     def send(keys):os.write(master,keys);drain(.15)
     def active():
         s=status()
-        if s['audio_pid'] is None and s['playback']['state']==0:raise AssertionError(s['message'])
+        if s['audio_pid'] is None and s['playback']['state']==0:raise AssertionError('native playback stopped; private backend details withheld')
         return s['playback']['playing'] and s['playback']['encrypted_packets']>0
     try:
         bus=subprocess.Popen(['dbus-daemon','--session','--nofork','--print-address'],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)
@@ -78,8 +78,8 @@ with tempfile.TemporaryDirectory(prefix='rustune-native-live-') as directory:
         master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',39,142,0,0))
         tui=subprocess.Popen([binary],env=env,stdin=slave,stdout=slave,stderr=slave,start_new_session=True);os.close(slave)
         wait(lambda:'RUSTUNE' in text(),'actual release TUI renders')
-        send(b'8');wait(lambda:'Simple Man' in text(),'keyboard opens real queue')
-        send(b'\r');wait(lambda:'Lyrics and cover' in text(),'keyboard opens song actions')
+        send(b'4');wait(lambda:'Simple Man' in text(),'keyboard opens real queue')
+        send(b'\r');wait(lambda:'Lyrics' in text(),'keyboard opens song actions')
         send(b'\x1b[B\r');wait(active,'keyboard Play starts native CDM audio')
         check((cache/'apple-app-token').is_file(),'public application authorization fetched anonymously without a prefilled cache')
         check((cache/'apple-app-token').stat().st_mode&0o777==0o600,'public application authorization cache is private')
@@ -124,7 +124,7 @@ with tempfile.TemporaryDirectory(prefix='rustune-native-live-') as directory:
             if library['items']:
                 first=library['items'][0];page=rpc('browse',{'kind':'search:library-songs','term':first['title'],'next':None})
                 check(any(t['id']==first['id'] for t in page['items']),'private library search finds an actual saved song without recording its metadata')
-            send(b'3');send(b'A&W lana del ray\r');wait(lambda:'A&W' in text() and 'Lana Del Rey' in text(),'actual TUI finds the combined typo query')
+            send(b'1/');send(b'A&W lana del ray\r');wait(lambda:'A&W' in text() and 'Lana Del Rey' in text(),'actual TUI finds the combined typo query')
             send(b'\r\x1b[B\x1b[B\r');wait(lambda:status()['playback'].get('track',{}).get('id')=='1655349125' and active(),'requested A&W result plays through the real native backend')
             send(b'e');wait(lambda:'EQUALIZER' in text(),'keyboard opens real equalizer')
             send(b'\r\x1b[B\x1b[C');wait(lambda:status()['equalizer']['enabled'] and status()['equalizer']['bands_db'][0]==6.0,'keyboard enables real Bass preset')
@@ -160,13 +160,13 @@ with tempfile.TemporaryDirectory(prefix='rustune-native-live-') as directory:
         rpc('clear');rpc('enqueue',{'track':track,'next':False,'play':True});wait(active,'complete-song test restarts at the beginning through the real service')
         check(status()['playback']['position']<3,'full-song verification begins at zero without seeking')
         if args.eq_search:wait(lambda:status()['equalizer']['enabled'] and status()['equalizer_samples']>4096,'saved equalizer applies to the new complete-song worker')
-        send(b'2')
+        send(b'5')
         wait(lambda:'AAC' in text() and '44.1' in text(),'TUI displays decoder-reported AAC sample rate')
         wait(lambda:any('▀' in line for line in screen.display),'real cover renders during native playback',20)
         full_start=time.monotonic();samples=[];last_measure=0
         while time.monotonic()-full_start<400:
             s=status();p=s['playback'];report['lyrics_loaded_during_playback']='LRCLIB' in text() and 'synced' in text();report['last_playback']=p;report['message']=s['message'];report['elapsed_full_test_seconds']=time.monotonic()-full_start
-            if s['audio_pid'] is None and not p['ended']:raise AssertionError(s['message'])
+            if s['audio_pid'] is None and not p['ended']:raise AssertionError('native playback stopped; private backend details withheld')
             if time.monotonic()-last_measure>=5:
                 measurements=[]
                 for pid in [daemon.pid,tui.pid,s['audio_pid']]:

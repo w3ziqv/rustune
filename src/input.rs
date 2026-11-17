@@ -338,8 +338,16 @@ pub struct Events {
 }
 impl Events {
     pub fn new() -> io::Result<Self> {
+        Self::with_initial(&[])
+    }
+    pub fn with_initial(bytes: &[u8]) -> io::Result<Self> {
         let (wake, cancel) = UnixStream::pair()?;
         let mut reader = Reader::with_cancel(Some(cancel))?;
+        for byte in bytes {
+            if let Some(event) = reader.parser.feed(*byte) {
+                reader.events.push_back(event);
+            }
+        }
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let thread = std::thread::Builder::new()
             .name("rustune-input".into())

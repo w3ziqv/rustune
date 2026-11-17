@@ -111,7 +111,9 @@ impl Engine {
                 self.fail_audio(error.to_string()).await;
             }
         } else {
-            self.stop_audio().await;
+            // The Ended event already reaped the worker. Keep its final position
+            // and output counters visible until the next explicit transport action.
+            self.desired_paused = false;
             self.message = "End of queue".into();
         }
     }

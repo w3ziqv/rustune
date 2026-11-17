@@ -3,7 +3,14 @@ use super::*;
 pub(super) struct BrowseView {
     album_view: Option<crate::catalog::album::AlbumRef>,
     playlist_view: Option<crate::catalog::playlist::PlaylistRef>,
-    screen: usize,
+    screen: Screen,
+    browse_state: BrowseState,
+    browse_retry: Option<Request>,
+    inspected_track: Option<Track>,
+    lyrics_scroll: Option<usize>,
+    note: String,
+    search_type: usize,
+    catalog_context: String,
     kind: String,
     query: String,
     items: Vec<Track>,
@@ -24,7 +31,7 @@ impl SongActions {
     fn labels(&self) -> &'static [&'static str] {
         if self.queue_index.is_some() {
             &[
-                "Lyrics and cover",
+                "Lyrics",
                 "Play",
                 "Remove and advance (if current)",
                 "Move up",
@@ -33,7 +40,7 @@ impl SongActions {
             ]
         } else {
             &[
-                "Lyrics and cover",
+                "Lyrics",
                 "Append to end",
                 "Play song — replaces queue",
                 "Play next (FIFO)",
@@ -51,6 +58,13 @@ impl App {
             album_view: self.album_view.clone(),
             playlist_view: self.playlist_view.clone(),
             screen: self.screen,
+            browse_state: self.browse_state,
+            browse_retry: self.browse_retry.clone(),
+            inspected_track: self.inspected_track.clone(),
+            lyrics_scroll: self.lyrics_scroll,
+            note: self.note.clone(),
+            search_type: self.search_type,
+            catalog_context: self.catalog_context.clone(),
             kind: self.kind.clone(),
             query: self.query.clone(),
             items: self.items.clone(),
@@ -69,10 +83,15 @@ impl App {
         self.album_view = view.album_view;
         self.playlist_view = view.playlist_view;
         self.screen = view.screen;
-        self.nav = view.screen;
+        self.browse_state = view.browse_state;
+        self.search_type = view.search_type;
+        self.catalog_context = view.catalog_context;
+        self.browse_retry = view.browse_retry;
+        self.note = view.note;
+        self.nav = view.screen.nav_index();
         self.kind = view.kind;
         self.query = view.query;
-        self.items = if view.screen == 7 {
+        self.items = if view.screen == Screen::Queue {
             self.queue_view_revision = None;
             Vec::new()
         } else {
@@ -83,9 +102,11 @@ impl App {
         self.selected = view.selected;
         self.queue_offset = view.queue_offset;
         self.catalog_offset = view.catalog_offset;
-        self.sidebar = false;
-        self.control_focus = None;
-        self.inspected_track = None;
+        self.focus = Focus::Content;
+        self.focus = Focus::Content;
+        self.inspected_track = view.inspected_track;
+        self.lyrics_scroll = view.lyrics_scroll;
+        self.restore_lyrics_scroll = self.screen == Screen::Lyrics;
         self.input = Input::None;
         true
     }
@@ -118,7 +139,7 @@ impl App {
     pub(super) fn open_song_actions(&mut self, track: Track) {
         self.song_actions = Some(SongActions {
             track,
-            entry_id: if self.screen == 7 {
+            entry_id: if self.screen == Screen::Queue {
                 self.queue_rows.get(self.selected).map(|e| e.entry_id)
             } else {
                 None
@@ -127,7 +148,8 @@ impl App {
                 .queue_view_revision
                 .or_else(|| self.status.as_ref().map(|status| status.queue_revision))
                 .unwrap_or(0),
-            queue_index: (self.screen == 7).then_some(self.queue_offset + self.selected),
+            queue_index: (self.screen == Screen::Queue)
+                .then_some(self.queue_offset + self.selected),
             selected: 0,
         });
     }
@@ -148,7 +170,7 @@ impl App {
                 if menu.selected == 0 {
                     self.remember_view();
                     self.inspected_track = Some(menu.track);
-                    self.go(8);
+                    self.go(Screen::Lyrics);
                     self.note = "Lyrics preview · playback unchanged".into();
                 } else if menu.selected == if menu.queue_index.is_some() { 5 } else { 4 } {
                     let source = if let Some(entry_id) = menu.entry_id {
@@ -241,6 +263,16 @@ impl App {
                 status.map_or(crate::model::Repeat::Off, |s| s.repeat)
             ),
             "Search history".into(),
+            format!(
+                "Pixelated artwork: {}",
+                if self.config.artwork_style == crate::config::ArtworkStyle::Pixelated {
+                    "on"
+                } else {
+                    "off"
+                }
+            ),
+            "Equalizer".into(),
+            "Audio information".into(),
             "Help".into(),
             "Quit".into(),
         ]
@@ -257,6 +289,7 @@ impl App {
             }
             2 => {
                 let themes = [
+                    "graphite",
                     "monochrome",
                     "tokyo_night",
                     "nord",
@@ -302,11 +335,23 @@ impl App {
             7 => Some(Request::Shuffle),
             8 => Some(Request::Repeat),
             9 => Some(Request::History),
-            10 => {
-                self.go(12);
+            10 => Some(Request::ArtworkStyle(match self.config.artwork_style {
+                crate::config::ArtworkStyle::Pixelated => crate::config::ArtworkStyle::Smooth,
+                crate::config::ArtworkStyle::Smooth => crate::config::ArtworkStyle::Pixelated,
+            })),
+            11 => {
+                self.go(Screen::Equalizer);
                 None
             }
-            11 => return (true, None),
+            12 => {
+                self.go(Screen::AudioInfo);
+                None
+            }
+            13 => {
+                self.go(Screen::Help);
+                None
+            }
+            14 => return (true, None),
             _ => None,
         };
         (false, request)

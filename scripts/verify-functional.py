@@ -55,6 +55,12 @@ with tempfile.TemporaryDirectory(prefix='rustune-functional-') as directory:
                 size=struct.unpack('>I',read(4))[0];assert size<=4*1024*1024
                 return json.loads(read(size))
         status=lambda:rpc('status')['data']
+        def edit(index,to=None):
+            page=rpc('queue_page',{'offset':index})['data']
+            reply=rpc('queue_edit',dict(index=index,to=to,id=page['items'][0]['id'],revision=page['revision']))
+            end=time.monotonic()+3
+            while reply['ok'] and status()['queue_revision']==page['revision'] and time.monotonic()<end:time.sleep(.01)
+            return reply
         check(status()['queue_len']==3,'restored queue')
         check(status()['browser_pid'] is None and not status()['playback_available'],'token does not falsely enable native playback or browser fallback')
         for command,args in [('play',None),('pause',None),('next',None),('previous',None),('seek',10),('sleep',60)]:
@@ -86,18 +92,20 @@ with tempfile.TemporaryDirectory(prefix='rustune-functional-') as directory:
         def send(keys):os.write(master,keys);drain(.08)
         def command(value):send(b':'+value.encode()+b'\r')
         wait(lambda:'RUSTUNE' in text(),'tested binary renders main player')
-        check(screen.buffer[0][1].bg=='000000' and screen.buffer[0][1].fg=='ffffff','actual terminal black background and white text')
-        for x in [9,30,50]:
-            command('not-a-real-command');wait(lambda:'unknown command' in text(),'clear previous audio error before click '+str(x))
-            send(f'\x1b[<0;{x};36M'.encode())
+        check(screen.buffer[0][1].bg=='161619' and screen.buffer[0][1].fg=='b8a7d9','actual terminal graphite background and accent')
+        send(b'5')
+        for x in [30,46,63]:
+            command('stop');wait(lambda:'Failed:' not in text(),'clear previous audio error before click '+str(x))
+            send(f'\x1b[<0;{x};35M'.encode())
             wait(lambda:'Native Linux playback' in text(),f'mouse control at column {x} reports unsupported native audio')
-        send(b'8');wait(lambda:'Fixture Last' in text(),'queue navigation loads persisted items')
+        send(b'4');wait(lambda:'Fixture Last' in text(),'queue navigation loads persisted items')
         send(b'J');wait(lambda:rpc('queue_page',{'offset':0})['data']['items'][1]['id']==first['id'],'keyboard queue move down')
         send(b'K');wait(lambda:rpc('queue_page',{'offset':0})['data']['items'][0]['id']==first['id'],'keyboard queue move up')
-        send(b'l');wait(lambda:'LYRICS PREVIEW' in text(),'selected queue song opens a silent lyrics preview')
+        send(b'l');wait(lambda:'/ Lyrics' in text() and 'PREVIEW' in text(),'selected queue song opens a silent lyrics preview')
         wait(lambda:'LRCLIB' in text() and 'synced' in text(),'real synchronized lyrics in tested TUI',15)
-        wait(lambda:any('▀' in line[:60] for line in screen.display),'real Apple cover in tested TUI',10)
+        check(not any('▀' in line for line in screen.display), 'standalone lyrics has no artwork')
         before=text();send(b'jjjj');check(text()!=before,'lyrics keyboard scrolling changes visible rows')
+        send(b'5');wait(lambda:any('▀' in line for line in screen.display),'real Apple cover in Now Playing',10)
         command('profile minimal');wait(lambda:status()['profile']=='minimal','minimal profile is persisted')
         wait(lambda:not any('▀' in line for line in screen.display),'minimal profile actually removes artwork')
         command('profile balanced');wait(lambda:status()['profile']=='balanced','balanced profile is restored')
@@ -116,27 +124,31 @@ with tempfile.TemporaryDirectory(prefix='rustune-functional-') as directory:
         command('logout');wait(lambda:not token.exists(),'TUI logout removes only isolated local token')
         for w,h in [(40,10),(20,4),(160,48),(142,39)]:
             screen.resize(lines=h,columns=w);fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack('HHHH',h,w,0,0));tui.send_signal(signal.SIGWINCH);drain(.15);check(tui.poll() is None,f'live resize {w}x{h}')
-        send(b'8');wait(lambda:'Fixture Last' in text(),'queue remains usable after resizes')
+        send(b'4');wait(lambda:'Fixture Last' in text(),'queue remains usable after resizes')
         added={'id':'external-test','kind':'songs','title':'External Test Song','artist':'Test artist','duration_ms':100000}
         check(rpc('enqueue',{'track':added,'next':False,'play':False})['ok'],'external CLI-style queue addition succeeds')
         wait(lambda:'External Test Song' in text(),'open TUI updates after external queue addition',3)
-        check(rpc('move',{'from':3,'to':1})['ok'],'external same-length queue reorder succeeds')
+        check(edit(3,1)['ok'],'external same-length queue reorder succeeds')
         wait(lambda:'External Test Song' in text() and text().index('External Test Song')<text().index('Fixture Last'),'open TUI updates after external same-length reorder',3)
         for i in range(27):
             track={'id':f'page-fixture-{i}','kind':'songs','title':f'Queue Page Fixture {i:02}','artist':'Test artist'}
             assert rpc('enqueue',{'track':track,'next':False,'play':False})['ok']
+            wait(lambda:status()['queue_len']==5+i,'queue addition committed')
         wait(lambda:status()['queue_len']==31,'external additions populate multiple queue pages')
         wait(lambda:'Queue Page Fixture 20' in text(),'first queue page is full before PgDn')
         send(b'\x1b[6~');wait(lambda:'Queue Page Fixture 21' in text(),'PgDn opens second queue page')
         for i in range(30,2,-1):
-            assert rpc('remove',i)['ok']
+            assert edit(i)['ok']
         wait(lambda:'Simple Man' in text() and 'Queue Page Fixture 21' not in text(),'external shrink returns TUI to a valid queue page',3)
-        send(b'l');wait(lambda:'LYRICS PREVIEW' in text(),'return to player before clicking Quit')
-        send(b'\x1b[<0;131;36M');tui.wait(timeout=5);check(tui.returncode==0,'Quit mouse button exits cleanly')
+        send(b'5');wait(lambda:'/ Now Playing' in text(),'return to player before clicking Quit')
+        send(b'\x1b[<0;130;35M');tui.wait(timeout=5);check(tui.returncode==0,'Quit mouse button exits cleanly')
         check(daemon.poll() is None,'attached TUI leaves preexisting service alive')
-        rpc('stop');daemon.wait(timeout=5);daemon=start_daemon();check(status()['queue_len']==3,'queue survives service restart')
+        rpc('shutdown');daemon.wait(timeout=5);daemon=start_daemon();check(status()['queue_len']==3,'queue survives service restart')
         check(rpc('clear')['ok'],'queue clear succeeds')
-        rpc('stop');daemon.wait(timeout=5);daemon=start_daemon();check(status()['queue_len']==0,'cleared queue survives service restart')
+        deadline=time.monotonic()+5
+        while status()['queue_len']>1 and time.monotonic()<deadline: time.sleep(.02)
+        check(status()['queue_len']==1,'clear upcoming retains the current entry')
+        rpc('shutdown');daemon.wait(timeout=5);daemon=start_daemon();check(status()['queue_len']==1,'clear upcoming survives service restart')
         check(status()['browser_pid'] is None,'no browser was started during functional tests')
     except Exception as e:
         report['failure']=str(e);report['success']=False

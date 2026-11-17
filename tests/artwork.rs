@@ -38,7 +38,7 @@ async fn real_artwork_worker_downloads_and_renders_an_apple_cover() {
     jobs.send(Some(CoverRequest{
         size:ratatui::layout::Size::new(24,12),
         url:"https://is1-ssl.mzstatic.com/image/thumb/Music112/v4/a9/52/4d/a9524d7e-631b-ece3-cf70-cf37023e8251/886443710016.jpg/{w}x{h}bb.jpg".into(),
-        profile:PerformanceMode::Balanced,protocol:"halfblocks".into(),background:[0,0,0],
+        profile:PerformanceMode::Balanced,protocol:"halfblocks".into(),cell:(10,20),image_id:1,background:[0,0,0],
     })).unwrap();
     let result = tokio::time::timeout(std::time::Duration::from_secs(10), done.recv())
         .await

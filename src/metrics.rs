@@ -26,6 +26,10 @@ pub fn parse_memory(s: &str) -> Memory {
 mod helper_tests {
     use super::*;
     #[test]
+    fn absent_session_never_counts_the_measurement_command() {
+        assert!(members(&BTreeMap::new(), None).0.is_empty());
+    }
+    #[test]
     fn native_measurement_includes_the_separate_audio_helper() {
         let status:crate::service::Status=serde_json::from_value(serde_json::json!({"playback":{},"queue_len":0,"current":null,"repeat":"off","shuffle":false,"profile":"balanced","pid":11,"audio_pid":12,"browser_pid":null,"backend":"native","browser_shared":false,"uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null})).unwrap();
         let map = BTreeMap::from([(11, (1, 11, 0)), (12, (11, 12, 0))]);
@@ -123,41 +127,16 @@ fn members(
     map: &BTreeMap<u32, (u32, u32, u64)>,
     status: Option<&crate::service::Status>,
 ) -> (Vec<u32>, Vec<u32>) {
-    let exe = std::env::current_exe().ok();
-    let me = std::process::id();
-    let mut native: Vec<_> = map
-        .keys()
-        .filter(|pid| {
-            **pid != me
-                && exe.is_some()
-                && fs::read_link(format!("/proc/{pid}/exe"))
-                    .ok()
-                    .and_then(|p| {
-                        p.file_name().map(|v| {
-                            v.to_string_lossy()
-                                .trim_end_matches(" (deleted)")
-                                .to_owned()
-                        })
-                    })
-                    .as_deref()
-                    == Some("rustune")
-        })
-        .copied()
-        .collect();
-    if let Some(s) = status
-        && map.contains_key(&s.pid)
-        && !native.contains(&s.pid)
-    {
-        native.push(s.pid);
-    }
-    if let Some(pid) = status.and_then(|s| s.audio_pid)
-        && map.contains_key(&pid)
-        && !native.contains(&pid)
-    {
-        native.push(pid);
-    }
-    if native.is_empty() {
-        native.push(me);
+    let mut native = Vec::new();
+    if let Some(s) = status {
+        for pid in std::iter::once(s.pid)
+            .chain(s.audio_pid)
+            .chain(s.client_pids.iter().copied())
+        {
+            if map.contains_key(&pid) && !native.contains(&pid) {
+                native.push(pid);
+            }
+        }
     }
     let mut browser = Vec::new();
     if let Some(root) = status.and_then(|s| s.browser_pid) {
@@ -183,17 +162,37 @@ fn members(
     browser.retain(|pid| !native.contains(pid));
     (native, browser)
 }
-pub async fn sample(status: Option<&crate::service::Status>, duration: Duration) -> Report {
+pub async fn sample(paths: &crate::config::Paths, duration: Duration) -> Report {
+    async fn current_status(paths: &crate::config::Paths) -> Option<crate::service::Status> {
+        tokio::time::timeout(
+            Duration::from_millis(250),
+            crate::ipc::request(paths, &crate::ipc::Request::Status),
+        )
+        .await
+        .ok()?
+        .ok()
+        .and_then(|v| serde_json::from_value(v).ok())
+    }
+    let mut state = current_status(paths).await;
+    let mut status = state.as_ref();
     let mut map = processes();
     let (mut native, mut browser) = members(&map, status);
     let counters = |map: &BTreeMap<u32, (u32, u32, u64)>,
                     native: &Vec<u32>,
                     browser: &Vec<u32>|
-     -> BTreeMap<u32, u64> {
+     -> BTreeMap<(u32, u64), u64> {
         native
             .iter()
             .chain(browser)
-            .filter_map(|pid| map.get(pid).map(|(_, _, ticks)| (*pid, *ticks)))
+            .filter_map(|pid| {
+                let text = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+                let start = text[text.rfind(')')? + 1..]
+                    .split_whitespace()
+                    .nth(19)?
+                    .parse::<u64>()
+                    .ok()?;
+                map.get(pid).map(|(_, _, ticks)| ((*pid, start), *ticks))
+            })
             .collect()
     };
     let mut previous = counters(&map, &native, &browser);
@@ -207,16 +206,23 @@ pub async fn sample(status: Option<&crate::service::Status>, duration: Duration)
                 .min(Duration::from_secs(1)),
         )
         .await;
+        state = current_status(paths).await;
+        status = state.as_ref();
         map = processes();
         (native, browser) = members(&map, status);
         let current = counters(&map, &native, &browser);
         let delta = |pids: &Vec<u32>| {
             let values = current
                 .iter()
-                .filter(|(pid, _)| pids.contains(pid))
+                .filter(|((pid, _), _)| pids.contains(pid))
                 .map(|(pid, t)| (*pid, *t))
-                .collect();
-            tick_delta(&previous, &values)
+                .collect::<BTreeMap<_, _>>();
+            values
+                .iter()
+                .map(|(identity, ticks)| {
+                    ticks.saturating_sub(previous.get(identity).copied().unwrap_or(0))
+                })
+                .sum::<u64>()
         };
         native_ticks += delta(&native);
         browser_ticks += delta(&browser);
@@ -237,7 +243,7 @@ pub async fn sample(status: Option<&crate::service::Status>, duration: Duration)
         pss_kib: n.pss_kib.zip(b.pss_kib).map(|(n, b)| n + b),
     };
     Report {
-        methodology: "/proc/PID/smaps_rollup KiB; PSS only if all reads succeed, otherwise VmRSS fallback. Process trees refreshed each <=1 second and at final measurement. CPU sums per-PID utime+stime deltas / CLK_TCK / elapsed, 100% = one core. New processes count since birth; processes exiting between samples can be missed, so CPU under churn is a lower bound. Native = Rustune executable family (including installed/deleted binary copies), excluding this measurement command; browser excludes native helper PIDs. Shared Firefox includes all its tabs; not incremental Rustune cost.",
+        methodology: "Selected Unix-socket session only: service, subscribed clients and current audio helper; membership refreshed each sample. /proc/PID/smaps_rollup KiB; unknown PSS remains null. CPU uses PID plus starttime, 100% = one core. Processes that exit between samples may be missed. Terminal renderer memory is measured separately; not included here.",
         native_pids: native,
         browser_pids: browser,
         native: n,

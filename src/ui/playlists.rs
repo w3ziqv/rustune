@@ -85,7 +85,8 @@ impl App {
     pub(super) fn playlist_destination(&mut self, source: PlaylistWriteSource) -> Request {
         self.remember_view();
         self.playlist_target = Some(source);
-        self.go(6).expect("playlist screen requests metadata")
+        self.go(Screen::Playlists)
+            .expect("playlist screen requests metadata")
     }
     pub(super) fn playlist_menu_key(&mut self, key: KeyCode) -> (bool, Option<Request>) {
         let Some(dialog) = self.playlist_dialog.take() else {

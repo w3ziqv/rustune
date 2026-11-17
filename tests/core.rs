@@ -19,12 +19,14 @@ fn config_rejects_invalid_volume_and_unknown_keys() {
     assert_eq!(Config::parse("").unwrap().volume, 0.7);
 }
 #[test]
-fn profiles_change_cache_and_work_frequency() {
+fn profiles_bound_cache_and_artwork() {
     let m = PerformanceMode::Minimal.limits();
     let b = PerformanceMode::Balanced.limits();
     let e = PerformanceMode::Enhanced.limits();
     assert!(m.cache_entries < b.cache_entries && b.cache_entries < e.cache_entries);
-    assert!(m.refresh_ms > b.refresh_ms && b.refresh_ms > e.refresh_ms);
+    assert_eq!(m.artwork_entries, 0);
+    assert_eq!(b.artwork_entries, 1);
+    assert_eq!(e.artwork_entries, 1);
 }
 #[test]
 fn queue_mutations_preserve_current_identity() {
@@ -99,8 +101,12 @@ fn ten_thousand_song_queue_is_bounded_and_preserves_selection_under_reordering()
 }
 
 #[test]
-fn monochrome_is_default_and_tokyo_night_is_selectable() {
-    assert_eq!(Config::default().theme, "monochrome");
+fn graphite_is_default_and_explicit_themes_are_preserved() {
+    assert_eq!(Config::default().theme, "graphite");
+    assert_eq!(
+        Config::parse("theme = 'monochrome'").unwrap().theme,
+        "monochrome"
+    );
     assert!(Config::parse("theme = 'tokyo_night'").is_ok());
 }
 

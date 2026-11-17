@@ -88,8 +88,8 @@ async fn search_open_one_album_action_and_every_eof_crosses_all_45_tracks() {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     let mut app = App::new(Config::default());
-    app.screen = 2;
-    app.sidebar = false;
+    app.screen = Screen::Search;
+    app.focus = Focus::Content;
     app.kind = "search:albums".into();
     app.query = "Synthetic".into();
     app.on_status(status(&paths).await);
@@ -174,7 +174,7 @@ async fn search_open_one_album_action_and_every_eof_crosses_all_45_tracks() {
             .await;
     }
     wait(&paths, |s| {
-        s.playback.phase == crate::model::PlaybackPhase::Stopped
+        s.playback.phase == crate::model::PlaybackPhase::Ended && s.audio_pid.is_none()
     })
     .await;
     assert_eq!(factory.starts().len(), 45);
@@ -279,7 +279,7 @@ async fn playlist_ui_ipc_full_context_private_save_and_every_eof() {
     }
     let mut app = App::new(Config::default());
     app.on_status(status(&paths).await);
-    let browse = app.go(6).unwrap();
+    let browse = app.go(Screen::Playlists).unwrap();
     app.accept(&browse, ipc::request(&paths, &browse).await.unwrap())
         .unwrap();
     assert_eq!(app.items[0].can_edit, Some(true));
@@ -354,7 +354,7 @@ async fn playlist_ui_ipc_full_context_private_save_and_every_eof() {
             .await;
     }
     wait(&paths, |s| {
-        s.playback.phase == crate::model::PlaybackPhase::Stopped
+        s.playback.phase == crate::model::PlaybackPhase::Ended && s.audio_pid.is_none()
     })
     .await;
     assert_eq!(factory.starts().len(), 45);

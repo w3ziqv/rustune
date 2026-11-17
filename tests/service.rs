@@ -206,6 +206,21 @@ async fn real_service_persists_queue_pushes_updates_and_obeys_mpris() {
         ipc::request(&paths, &Request::Status).await.unwrap()["shuffle"],
         true
     );
+    let style: Request =
+        serde_json::from_value(serde_json::json!({"command":"artwork_style","args":"smooth"}))
+            .unwrap();
+    let appearance = ipc::request(&paths, &style).await.unwrap();
+    assert_eq!(appearance["appearance"]["artwork_style"], "smooth");
+    for _ in 0..100 {
+        if Config::load(&paths).unwrap().artwork_style == rustune::config::ArtworkStyle::Smooth {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        Config::load(&paths).unwrap().artwork_style,
+        rustune::config::ArtworkStyle::Smooth
+    );
     let before_restart = ipc::request(&paths, &Request::QueuePage { offset: 0 })
         .await
         .unwrap();
@@ -228,5 +243,9 @@ async fn real_service_persists_queue_pushes_updates_and_obeys_mpris() {
         .unwrap();
     assert_eq!(restored["items"], before_restart["items"]);
     assert_eq!(restored["total"], 3);
+    assert_eq!(
+        ipc::request(&paths, &Request::Status).await.unwrap()["appearance"]["artwork_style"],
+        "smooth"
+    );
     ipc::request(&paths, &Request::Stop).await.unwrap();
 }

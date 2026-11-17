@@ -44,7 +44,7 @@ impl AlbumRef {
         }
     }
 }
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Skipped {
     pub count: usize,
     pub reason: String,

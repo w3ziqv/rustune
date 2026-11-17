@@ -33,8 +33,20 @@ use tokio::{
     sync::{Semaphore, mpsc, oneshot, watch},
 };
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Appearance {
+    pub theme: String,
+    pub artwork: bool,
+    pub artwork_style: crate::config::ArtworkStyle,
+    pub lyrics: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Status {
+    #[serde(default)]
+    pub client_pids: Vec<u32>,
+    #[serde(default)]
+    pub appearance: Option<Appearance>,
     #[serde(default)]
     pub equalizer: rustune_core::equalizer::EqSettings,
     #[serde(default)]
@@ -138,7 +150,39 @@ pub async fn send(tx: &Sender, request: Request) -> Result<Value> {
         .value()
 }
 
+struct ClientRegistration {
+    clients: Arc<std::sync::Mutex<std::collections::BTreeMap<u32, usize>>>,
+    pid: Option<u32>,
+}
+impl ClientRegistration {
+    fn new(
+        clients: Arc<std::sync::Mutex<std::collections::BTreeMap<u32, usize>>>,
+        pid: Option<u32>,
+    ) -> Self {
+        if let Some(pid) = pid
+            && let Ok(mut entries) = clients.lock()
+        {
+            *entries.entry(pid).or_default() += 1;
+        }
+        Self { clients, pid }
+    }
+}
+impl Drop for ClientRegistration {
+    fn drop(&mut self) {
+        if let Some(pid) = self.pid
+            && let Ok(mut entries) = self.clients.lock()
+            && let Some(count) = entries.get_mut(&pid)
+        {
+            *count -= 1;
+            if *count == 0 {
+                entries.remove(&pid);
+            }
+        }
+    }
+}
+
 struct Engine {
+    clients: Arc<std::sync::Mutex<std::collections::BTreeMap<u32, usize>>>,
     equalizer_applied: Option<rustune_core::equalizer::EqSettings>,
     equalizer_headroom_db: f64,
     equalizer_samples: u64,
@@ -221,6 +265,7 @@ impl Engine {
             }
         });
         Ok(Self {
+            clients: Arc::default(),
             equalizer_applied: None,
             equalizer_headroom_db: 0.0,
             equalizer_samples: 0,
@@ -272,6 +317,17 @@ impl Engine {
     }
     fn status(&self) -> Status {
         Status {
+            client_pids: self
+                .clients
+                .lock()
+                .map(|v| v.keys().copied().collect())
+                .unwrap_or_default(),
+            appearance: Some(Appearance {
+                theme: self.config.theme.clone(),
+                artwork: self.config.artwork,
+                artwork_style: self.config.artwork_style,
+                lyrics: self.config.lyrics,
+            }),
             equalizer: self.config.equalizer.clone(),
             equalizer_applied: self.equalizer_applied.clone(),
             equalizer_headroom_db: self.equalizer_headroom_db,
@@ -648,6 +704,10 @@ impl Engine {
                 self.catalog.set_capacity(profile.limits().cache_entries);
                 self.config_tx.send_replace(Some(self.config.clone()));
             }
+            Request::ArtworkStyle(style) => {
+                self.config.artwork_style = style;
+                self.config_tx.send_replace(Some(self.config.clone()));
+            }
             Request::Artwork(enabled) => {
                 self.config.artwork = enabled;
                 self.config_tx.send_replace(Some(self.config.clone()));
@@ -826,6 +886,7 @@ pub(crate) async fn run_with(
     }
     let permits = Arc::new(Semaphore::new(8));
     let (quit_accept, mut accept_quit) = oneshot::channel::<()>();
+    let registry = engine.clients.clone();
     let accept = tokio::spawn(async move {
         let mut clients = tokio::task::JoinSet::new();
         loop {
@@ -835,6 +896,7 @@ pub(crate) async fn run_with(
                     let Ok((mut s,_))=accepted else{break;};
                     if s.peer_cred().is_err() || s.peer_cred().is_ok_and(|c|c.uid()!=uid){continue;}
                     let Ok(permit)=permits.clone().try_acquire_owned() else {continue;};let sender=tx.clone();let mut updates=subscriber.clone();let metadata=catalog.clone();
+                    let registry = registry.clone();
                     clients.spawn(async move {
                         let _permit=permit;
                         let operation=async {
@@ -842,6 +904,8 @@ pub(crate) async fn run_with(
                             ensure!(b.len()<=65536,"command exceeds 64 KiB");
                             let request:Request=serde_json::from_slice(&b)?;
                             if matches!(request,Request::Subscribe) {
+                                let pid = s.peer_cred()?.pid().and_then(|p| u32::try_from(p).ok());
+                                let _registration = ClientRegistration::new(registry, pid);
                                 loop {
                                     let status=updates.borrow_and_update().clone();
                                     write_frame(&mut s,&Reply::result(Ok(serde_json::to_value(status)?))).await?;

@@ -1,4 +1,8 @@
-# Measurements — 2026-11-10
+# Resource measurements
+
+See the [clean TUI measurements](validation/2026-11-15-clean-tui.md) for the graphite interface. Current session accounting uses the service PID, its reported audio helper and subscribed client PIDs.
+
+## Historical measurements — 2026-11-10
 
 The native audio helper and minimal private FFmpeg reduce the measured playback
 memory on this Linux machine. These are single-run observations, not limits.

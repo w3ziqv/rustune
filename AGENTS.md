@@ -32,6 +32,7 @@ Run online lyrics/artwork and PTY smoke separately from unit tests; they must
 not pretend to verify Apple authentication or playback. Record actual RSS/PSS and CPU
 measurements including every owned browser subprocess.
 
-Default appearance: pure black background and white text/borders. Tokyo Night is
-an optional theme. Keep real album artwork bounded and lazy-loaded; report quality
+Default appearance (user-approved 2026-11-14): graphite background #161619, panels
+#202024, text #E6E3DF and one accent #B8A7D9. Monochrome and Tokyo Night remain
+optional themes; preserve existing explicit preferences. Keep real album artwork bounded and lazy-loaded; report quality
 only from reliable backend fields and label reported values clearly.

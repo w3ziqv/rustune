@@ -13,7 +13,6 @@ pub enum PerformanceMode {
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
     pub cache_entries: usize,
-    pub refresh_ms: u64,
     pub page_size: usize,
     pub artwork_entries: usize,
     pub artwork_pixels: u32,
@@ -23,28 +22,33 @@ impl PerformanceMode {
         match self {
             Self::Minimal => Limits {
                 cache_entries: 1,
-                refresh_ms: 2000,
                 page_size: 15,
                 artwork_entries: 0,
                 artwork_pixels: 0,
             },
             Self::Balanced => Limits {
                 cache_entries: 8,
-                refresh_ms: 1000,
                 page_size: 25,
-                artwork_entries: 4,
+                artwork_entries: 1,
                 artwork_pixels: 256,
             },
             Self::Enhanced => Limits {
                 cache_entries: 32,
-                refresh_ms: 500,
                 page_size: 50,
-                artwork_entries: 16,
+                artwork_entries: 1,
                 artwork_pixels: 512,
             },
         }
     }
 }
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtworkStyle {
+    #[default]
+    Pixelated,
+    Smooth,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -59,6 +63,7 @@ pub struct Config {
     pub artwork: bool,
     pub lyrics: bool,
     pub artwork_protocol: String,
+    pub artwork_style: ArtworkStyle,
     pub logging: bool,
     pub restore_queue: bool,
     pub max_queue: usize,
@@ -72,13 +77,14 @@ impl Default for Config {
             performance: PerformanceMode::Balanced,
             catalog_country: default_catalog_country(),
             volume: 0.7,
-            theme: "monochrome".into(),
+            theme: "graphite".into(),
             daemon: false,
             notifications: false,
             mouse: true,
             artwork: true,
             lyrics: true,
             artwork_protocol: "auto".into(),
+            artwork_style: ArtworkStyle::Pixelated,
             logging: false,
             restore_queue: true,
             max_queue: 10_000,
@@ -107,6 +113,13 @@ impl Config {
         for key in ["browser", "bridge_port", "headless"] {
             value.remove(key);
         }
+        if !value.contains_key("artwork_style") {
+            let style = match value.get("artwork_protocol").and_then(toml::Value::as_str) {
+                Some("kitty" | "iterm2") => "smooth",
+                _ => "pixelated",
+            };
+            value.insert("artwork_style".into(), toml::Value::String(style.into()));
+        }
         let mut c: Self = toml::Value::Table(value)
             .try_into()
             .context("invalid config TOML")?;
@@ -127,6 +140,7 @@ impl Config {
         );
         ensure!(
             [
+                "graphite",
                 "dark",
                 "light",
                 "catppuccin_mocha",

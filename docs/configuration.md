@@ -8,10 +8,11 @@ under XDG runtime, with a private data-directory fallback.
 ```toml
 performance = "balanced"
 catalog_country = "PL"
-theme = "monochrome"
+theme = "graphite"
 artwork = true
 lyrics = true
 artwork_protocol = "auto"
+artwork_style = "pixelated"
 volume = 0.7
 daemon = false
 notifications = false
@@ -27,7 +28,7 @@ the sanitized configuration is saved atomically with mode 0600. Unrecognized
 keys, invalid values, files over 64 KiB and invalid TOML remain errors and are
 not overwritten. Token and queue files are not changed by migration.
 
-Themes: `monochrome` (pure black/white default), `tokyo_night` (`tokio` alias),
+Themes: `graphite` (default), `monochrome` (pure black/white), `tokyo_night` (`tokio` alias),
 `dark`, `light`, `catppuccin_mocha`, `catppuccin_latte`, `gruvbox`, `nord`, `custom`.
 Custom `[colors]` accepts background, foreground, muted, accent and panel RGB hex
 values. `[keybindings]` maps Help action names to keys such as `ctrl-x`, `Space`,
@@ -36,13 +37,27 @@ values. `[keybindings]` maps Help action names to keys such as `ctrl-x`, `Space`
 | Profile | Queue items/page | Cached lyrics | Covers | Source image limit |
 |---|---:|---:|---:|---:|
 | minimal | 15 | 1 | 0 | disabled |
-| balanced | 25 | 8 | 4 | 256×256 |
-| enhanced | 50 | 32 | 16 | 512×512 |
+| balanced | 25 | 8 | 1 | 256×256 |
+| enhanced | 50 | 32 | 1 | 512×512 |
 
 Artwork is lazy, limited to public HTTPS Apple image hosts, 2 MiB downloads,
 5-second requests and bounded decode allocations. Rendering caps at 96×48 cells.
-`auto`/`halfblocks` need no terminal query; `kitty`/`iterm2` require terminal
-support. Sixel remains unavailable until pixel geometry is verified.
+`artwork_style = "pixelated"` uses terminal halfblocks; `"smooth"` uses a regular
+image through a supported Kitty/iTerm2 protocol with detected cell geometry.
+Settings → Pixelated artwork applies the choice globally. A bounded startup
+probe runs before the keyboard reader. Unsupported regular-image rendering
+shows an explanation instead of silently falling back to pixels. Sixel and
+unverified tmux/screen passthrough are unavailable.
+
+When `artwork_style` is missing, old `auto`/`halfblocks` configurations retain
+pixelated artwork; old explicit `kitty`/`iterm2` configurations select smooth.
+An explicit style wins. `artwork_protocol` remains an advanced compatibility
+constraint. Existing explicit themes are preserved.
+
+The worker retains one bounded decoded source and the UI one encoded cover.
+Resize reuses the source. Leaving artwork views or disabling artwork releases
+the source and rendered resources. Minimal disables artwork regardless of style.
+No profile claims to change a nonexistent refresh timer.
 The fullscreen TUI explicitly enables RGB output even when `NO_COLOR` is inherited.
 Half-block covers require both foreground and background colors to remain images;
 the monochrome theme still uses black/white text and borders. CLI output is unaffected.
@@ -63,11 +78,21 @@ IPC; it does not poll a browser or keep an idle playback refresh timer.
 cover fetching. Both use song metadata rather than credentials.
 
 Keyboard navigation: ↑/↓ selects, Enter/→ opens/confirms, ← returns from album
-tracks or a lyrics preview to previous results, Esc opens navigation. Tab cycles
-focus; player buttons use ←/→ and Enter. Search opens a typing field; Tab/F2
+tracks, Settings or a lyrics preview to previous results; Esc does the same and
+opens navigation when there is no previous view. Tab cycles
+focus; player buttons use ←/→ and Enter. `/` opens the search field; Tab/F2
 changes songs/albums/artists/My library. PgUp/PgDn changes pages (public queries cap at 200
 results). Settings exposes token entry/removal, themes, resource profiles,
-artwork, lyrics, public catalog country, queue shuffle/repeat, Help and Quit.
+artwork visibility/style, lyrics, public catalog country, queue shuffle/repeat,
+Equalizer, Audio information, Help and Quit. Audio information is read-only: the
+backend selects stream quality. `e` opens Settings → Equalizer directly.
+
+The seven numeric routes are Search (1), Library (2), Playlists (3), Queue (4),
+Now Playing (5), Lyrics (6), Settings (7). Albums and Artists are Search categories.
+`l` previews selected-song lyrics without playback; `6` follows the playing song.
+On lyrics, scroll manually with arrows or the wheel, then press `f` (or click the
+footer) to follow the current verse again. `R` reloads the lyrics. Lyrics has no
+cover request or player-button focus.
 
 `catalog_country` is a two-letter storefront code, normalized to uppercase.
 Public requests use fixed HTTPS Apple Music catalog endpoints, anonymous

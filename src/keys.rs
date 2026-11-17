@@ -22,6 +22,7 @@ pub const DEFAULTS: &[(&str, &str)] = &[
     ("lyrics", "l"),
     ("login", "L"),
     ("lyrics_refresh", "R"),
+    ("lyrics_follow", "f"),
     ("settings", ","),
     ("help", "?"),
     ("command", ":"),

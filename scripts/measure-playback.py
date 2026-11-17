@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix='rustune-ram-') as folder:
   while not runtime.exists() and time.monotonic()<deadline:time.sleep(.02)
   assert runtime.exists(),'measurement daemon unavailable'
   master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',39,142,0,0))
-  tui=subprocess.Popen([binary],env=env,stdin=slave,stdout=slave,stderr=slave,start_new_session=True);os.close(slave);drain(.3);rpc('play')
+  tui=subprocess.Popen([binary],env=env,stdin=slave,stdout=slave,stderr=slave,start_new_session=True);os.close(slave);drain(.3);os.write(master,b'5');drain(.2);rpc('play')
   deadline=time.monotonic()+30
   while time.monotonic()<deadline:
    s=rpc('status')

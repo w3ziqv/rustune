@@ -6,7 +6,7 @@ use crate::{
     },
     ipc::PlaylistWriteSource,
 };
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PlaylistWriteStatus {
     pub id: String,
     pub phase: String,

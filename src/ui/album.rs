@@ -173,6 +173,9 @@ impl App {
         ipc::queue_action(self.revision(), action)
     }
     pub(super) fn status_message(&self) -> String {
+        if !self.connected {
+            return "Service disconnected; reconnecting…".into();
+        }
         if let Some(error) = self.status.as_ref().and_then(|s| s.audio_error.as_ref()) {
             return format!("Failed: {error} · Play retries audio");
         }

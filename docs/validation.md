@@ -1,5 +1,7 @@
 # Validation
 
+[Clean TUI, artwork and native playback](validation/2026-11-15-clean-tui.md)
+
 ## Albums, queue and playlists — v0.2.0, 2026-11-10
 
 The release adds complete ordered album/playlist playback, stable queue occurrences,

@@ -82,6 +82,7 @@ pub enum Request {
     Sleep(u64),
     Theme(String),
     Artwork(bool),
+    ArtworkStyle(crate::config::ArtworkStyle),
     Lyrics(bool),
     CatalogCountry(String),
     Profile(crate::config::PerformanceMode),

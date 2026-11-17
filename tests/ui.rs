@@ -1,4 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use rustune::ui::Screen;
 use rustune::{
     keys::{action_for, parse_key, validate_bindings},
     ui::{render_smoke, visible_range},
@@ -44,19 +45,19 @@ fn terminal_layout_survives_tiny_and_large_sizes() {
 }
 
 #[test]
-fn default_frame_uses_black_background_and_white_text_and_borders() {
+fn default_frame_uses_graphite_and_a_single_accent() {
     use ratatui::{Terminal, backend::TestBackend, style::Color};
     let mut t = Terminal::new(TestBackend::new(100, 30)).unwrap();
     t.draw(render_smoke).unwrap();
     let b = t.backend().buffer();
-    assert_eq!(b[(1, 0)].fg, Color::Rgb(255, 255, 255));
-    assert_eq!(b[(1, 0)].bg, Color::Rgb(0, 0, 0));
-    assert_eq!(b[(0, 1)].fg, Color::Rgb(255, 255, 255));
+    assert_eq!(b[(1, 0)].fg, Color::Rgb(184, 167, 217));
+    assert_eq!(b[(1, 0)].bg, Color::Rgb(22, 22, 25));
+    assert_eq!(b[(0, 1)].fg, Color::Rgb(230, 227, 223));
 }
 
 fn playing_app() -> rustune::ui::App {
     let mut app = rustune::ui::App::new(rustune::config::Config::default());
-    app.screen = 1;
+    app.screen = Screen::NowPlaying;
     app.status = Some(serde_json::from_value(serde_json::json!({
         "playback":{"track":{"id":"song","title":"A song","artist":"Our Artist","artwork":"https://is1-ssl.mzstatic.com/a/{w}x{h}.jpg"}},
         "queue_len":1,"current":0,"repeat":"off","shuffle":false,"profile":"balanced",
@@ -121,7 +122,10 @@ fn primary_player_has_large_artwork_and_centered_synced_lyrics_on_the_right() {
     use rustune::lyrics::{Lyrics, LyricsResult, LyricsState};
     let mut app = playing_app();
     app.status.as_mut().unwrap().playback.position = 2.0;
-    assert_eq!(rustune::ui::App::new(Default::default()).screen, 1);
+    assert_eq!(
+        rustune::ui::App::new(Default::default()).screen,
+        Screen::Search
+    );
     let size = Size::new(142, 39);
     let cover = app.artwork_request(size).unwrap();
     assert!(cover.size.width >= 48 && cover.size.height >= 24);

@@ -132,14 +132,10 @@ async fn main() -> Result<()> {
         Some(Commands::Doctor) => doctor(&config, &paths).await?,
         Some(Commands::Stats { seconds }) => {
             anyhow::ensure!((1..=60).contains(&seconds), "seconds must be 1..60");
-            let status = ipc::request(&paths, &Request::Status)
-                .await
-                .ok()
-                .and_then(|v| serde_json::from_value::<Status>(v).ok());
             println!(
                 "{}",
                 serde_json::to_string_pretty(
-                    &rustune::metrics::sample(status.as_ref(), Duration::from_secs(seconds)).await
+                    &rustune::metrics::sample(&paths, Duration::from_secs(seconds)).await
                 )?
             );
         }
@@ -170,7 +166,7 @@ async fn main() -> Result<()> {
                 "render size limit is 500x200"
             );
             let mut app = rustune::ui::App::new(config);
-            app.screen = screen.min(rustune::ui::SCREENS.len() - 1);
+            app.screen = rustune::ui::Screen::MAIN[screen.min(rustune::ui::SCREENS.len() - 1)];
             let mut terminal =
                 ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))?;
             terminal.draw(|f| app.render(f))?;
@@ -503,12 +499,8 @@ async fn benchmark(paths: &Paths, seconds: u64) -> Result<()> {
         }
         measured.push(t.elapsed().as_secs_f64() * 1000.0);
     }
-    let status = ipc::request(paths, &Request::Status)
-        .await
-        .ok()
-        .and_then(|v| serde_json::from_value::<Status>(v).ok());
-    let before = rustune::metrics::sample(status.as_ref(), Duration::from_millis(250)).await;
-    let report = rustune::metrics::sample(status.as_ref(), Duration::from_secs(seconds)).await;
+    let before = rustune::metrics::sample(paths, Duration::from_millis(250)).await;
+    let report = rustune::metrics::sample(paths, Duration::from_secs(seconds)).await;
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({

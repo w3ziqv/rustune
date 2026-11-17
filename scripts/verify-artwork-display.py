@@ -89,6 +89,8 @@ with tempfile.TemporaryDirectory(prefix='rustune-artwork-display-') as folder:
     screen = pyte.Screen(140, 69)
     stream = pyte.Stream(screen)
     decoder = codecs.getincrementaldecoder('utf8')('replace')
+    time.sleep(.3)
+    os.write(master, b'5')
     block_count = colored = 0
     try:
         deadline = time.monotonic()+12

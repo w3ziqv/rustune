@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.0 — 2026-11-17
+
+- Start in Search and switch between seven views. Albums and artists are search categories. Escape restores the previous view and selection.
+- Preview lyrics independently of playback. Choose pixelated covers or regular images in compatible terminals from Settings.
+- Graphite is the default theme. Equalizer and decoder information are available in Settings.
+- Reconnect to the service after disconnects and retry failed catalog pages. Preserve the final playback position after the last song.
+- Mean playback PSS with pixelated artwork fell from 133.77 to 132.20 MiB in three resize runs. Idle PSS rose from 7.87 to 8.39 MiB.
+
+See the [validation report](docs/validation/2026-11-15-clean-tui.md) for the complete-song and hour-long playback checks.
+
 ## v0.1.0 — 2026-11-10
 
 First experimental source release for Linux.

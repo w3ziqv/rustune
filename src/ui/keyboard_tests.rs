@@ -9,21 +9,20 @@ fn arrow_keys_move_focused_navigation_and_open_search() {
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Down);
     assert_eq!(
-        app.nav, 2,
+        app.nav, 1,
         "Down must move the navigation, not the song list"
     );
+    press(&mut app, KeyCode::Up);
     press(&mut app, KeyCode::Right);
-    assert_eq!(app.screen, 2);
-    assert!(
-        app.input == Input::Search,
-        "Search should immediately accept typing"
-    );
-    assert!(!app.sidebar);
+    assert_eq!(app.screen, Screen::Search);
+    press(&mut app, KeyCode::Char('/'));
+    assert!(app.input == Input::Search);
+    assert!(app.focus != Focus::Navigation);
 }
 #[test]
 fn settings_are_actionable_using_arrows_and_enter() {
     let mut app = App::new(Config::default());
-    app.go(11);
+    app.go(Screen::Settings);
     press(&mut app, KeyCode::Down);
     press(&mut app, KeyCode::Down);
     assert!(
@@ -34,7 +33,7 @@ fn settings_are_actionable_using_arrows_and_enter() {
 #[test]
 fn song_actions_allow_queueing_without_attempting_playback() {
     let mut app = App::new(Config::default());
-    app.screen = 2;
+    app.screen = Screen::Search;
     app.items.push(Track {
         id: "123".into(),
         kind: "songs".into(),
@@ -57,6 +56,7 @@ fn song_actions_allow_queueing_without_attempting_playback() {
 #[test]
 fn right_arrow_focuses_player_buttons_and_enter_activates() {
     let mut app = App::new(Config::default());
+    app.screen = Screen::NowPlaying;
     assert!(press(&mut app, KeyCode::Right).is_none());
     assert!(matches!(
         press(&mut app, KeyCode::Enter),
@@ -71,7 +71,7 @@ fn right_arrow_focuses_player_buttons_and_enter_activates() {
 #[test]
 fn left_arrow_returns_from_album_tracks_to_search_results() {
     let mut app = App::new(Config::default());
-    app.screen = 2;
+    app.screen = Screen::Search;
     app.kind = "search:albums".into();
     app.query = "Our album".into();
     app.items.push(Track {
@@ -90,13 +90,13 @@ fn left_arrow_returns_from_album_tracks_to_search_results() {
     );
     press(&mut app, KeyCode::Left);
     assert_eq!(app.kind, "search:albums");
-    assert!(!app.sidebar);
+    assert!(app.focus != Focus::Navigation);
     assert_eq!(app.items[0].id, "123");
 }
 #[test]
 fn page_up_returns_to_previous_catalog_page() {
     let mut app = App::new(Config::default());
-    app.screen = 2;
+    app.screen = Screen::Search;
     app.kind = "search:songs".into();
     app.query = "Our song".into();
     app.accept(
@@ -132,7 +132,7 @@ fn search_leaves_player_focus_and_invalidates_old_results() {
         Some(Request::Browse { .. })
     ));
     assert!(
-        app.control_focus.is_none(),
+        !matches!(app.focus, Focus::Player(_)),
         "new results must not activate old player controls"
     );
     assert!(
@@ -143,14 +143,14 @@ fn search_leaves_player_focus_and_invalidates_old_results() {
 #[test]
 fn returning_to_queue_requires_fresh_rows_before_actions() {
     let mut app = App::new(Config::default());
-    app.screen = 7;
+    app.screen = Screen::Queue;
     app.items.push(Track {
         id: "old".into(),
         kind: "songs".into(),
         ..Track::default()
     });
     press(&mut app, KeyCode::Char('l'));
-    assert_eq!(app.screen, 8);
+    assert_eq!(app.screen, Screen::Lyrics);
     assert!(matches!(
         press(&mut app, KeyCode::Left),
         Some(Request::QueuePage { .. })
@@ -165,7 +165,7 @@ fn returning_to_queue_requires_fresh_rows_before_actions() {
 #[test]
 fn stale_queue_pages_do_not_populate_a_search_or_another_page() {
     let mut app = App::new(Config::default());
-    app.screen = 2;
+    app.screen = Screen::Search;
     let value = serde_json::json!({"items":[{"id":"old","kind":"songs","title":"Old queue"}]});
     app.accept(&Request::QueuePage { offset: 0 }, value.clone())
         .unwrap();
@@ -173,7 +173,7 @@ fn stale_queue_pages_do_not_populate_a_search_or_another_page() {
         app.items.is_empty(),
         "queue response must not replace current public search"
     );
-    app.screen = 7;
+    app.screen = Screen::Queue;
     app.queue_offset = 25;
     app.accept(&Request::QueuePage { offset: 0 }, value)
         .unwrap();
@@ -183,13 +183,13 @@ fn stale_queue_pages_do_not_populate_a_search_or_another_page() {
     );
 }
 
-fn assert_previous_catalog_page(screen: usize) {
+fn assert_previous_catalog_page(screen: Screen) {
     let mut app = App::new(Config {
         performance: crate::config::PerformanceMode::Enhanced,
         ..Config::default()
     });
     app.screen = screen;
-    app.kind = if screen == 3 {
+    app.kind = if screen == Screen::Library {
         "library"
     } else {
         "search:songs"
@@ -207,21 +207,21 @@ fn assert_previous_catalog_page(screen: usize) {
     .unwrap();
     assert!(
         matches!(press(&mut app, KeyCode::PageUp), Some(Request::Browse { next:Some(ref cursor),.. }) if cursor=="music:pl:25"),
-        "screen {screen} must return one actual catalog page"
+        "screen {screen:?} must return one actual catalog page"
     );
 }
 #[test]
 fn library_page_up_returns_to_the_previous_page() {
-    assert_previous_catalog_page(3);
+    assert_previous_catalog_page(Screen::Library);
 }
 #[test]
 fn enhanced_search_page_up_returns_one_actual_catalog_page() {
-    assert_previous_catalog_page(2);
+    assert_previous_catalog_page(Screen::Search);
 }
 #[test]
 fn equalizer_preserves_modified_seek_bindings_and_plain_arrows_edit_bands() {
     let mut app = App::new(Config::default());
-    app.go(9);
+    app.go(Screen::Equalizer);
     app.eq_selected = 2;
     app.status = Some(serde_json::from_value(serde_json::json!({"playback":{"position":50.0,"duration":120.0},"queue_len":0,"current":null,"repeat":"off","shuffle":false,"profile":"balanced","pid":1,"browser_pid":null,"backend":"test","browser_shared":false,"uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null})).unwrap());
     for (key, expected) in [(KeyCode::Right, 60.0), (KeyCode::Left, 40.0)] {
@@ -239,8 +239,8 @@ fn equalizer_preserves_modified_seek_bindings_and_plain_arrows_edit_bands() {
 #[test]
 fn album_actions_are_visible_from_results_and_details_and_song_play_keeps_album() {
     let mut app = App::new(Config::default());
-    app.screen = 2;
-    app.sidebar = false;
+    app.screen = Screen::Search;
+    app.focus = Focus::Content;
     app.kind = "search:albums".into();
     app.query = "Album".into();
     app.items = vec![Track {
@@ -299,8 +299,8 @@ fn album_actions_are_visible_from_results_and_details_and_song_play_keeps_album(
 #[test]
 fn opening_album_pins_details_to_selected_source_and_storefront() {
     let mut app = App::new(Config::default());
-    app.screen = 2;
-    app.sidebar = false;
+    app.screen = Screen::Search;
+    app.focus = Focus::Content;
     app.kind = "search:albums".into();
     app.items = vec![Track {
         id: "42".into(),
@@ -317,8 +317,8 @@ fn opening_album_pins_details_to_selected_source_and_storefront() {
 #[test]
 fn album_retry_binding_preserves_lyrics_reload() {
     let mut app = App::new(Config::default());
-    app.screen = 8;
-    app.sidebar = false;
+    app.screen = Screen::Lyrics;
+    app.focus = Focus::Content;
     assert!(press(&mut app, KeyCode::Char('R')).is_none());
     assert_eq!(app.lyrics_generation, 1);
 }
@@ -326,7 +326,7 @@ fn album_retry_binding_preserves_lyrics_reload() {
 #[test]
 fn playlists_open_whole_context_and_queue_save_requires_name_and_confirmation() {
     let mut app = App::new(Config::default());
-    let request = app.go(6).expect("Playlists loads metadata");
+    let request = app.go(Screen::Playlists).expect("Playlists loads metadata");
     assert!(matches!(request,Request::Browse{ref kind,..} if kind=="playlists"));
     app.accept(&request,serde_json::json!({"items":[{"id":"p.fixture","kind":"library-playlists","title":"Fixture","provider":"music","storefront":"pl","can_edit":true}],"next":null,"storefront":"pl","context":"Library"})).unwrap();
     let open = press(&mut app, KeyCode::Enter).unwrap();
@@ -341,8 +341,8 @@ fn playlists_open_whole_context_and_queue_save_requires_name_and_confirmation() 
             ..
         }
     ));
-    app.screen = 7;
-    app.sidebar = false;
+    app.screen = Screen::Queue;
+    app.focus = Focus::Content;
     assert!(press(&mut app, KeyCode::Char('S')).is_none());
     assert!(app.playlist_dialog.is_some());
     for c in "My queue".chars() {
@@ -359,7 +359,7 @@ fn playlists_open_whole_context_and_queue_save_requires_name_and_confirmation() 
 #[test]
 fn cancelling_playlist_destination_restores_source_and_clears_pending_export() {
     let mut app = App::new(Config::default());
-    app.screen = 2;
+    app.screen = Screen::Search;
     app.kind = "search:songs".into();
     app.items.push(Track {
         id: "1".into(),
@@ -370,13 +370,13 @@ fn cancelling_playlist_destination_restores_source_and_clears_pending_export() {
         track: Box::new(app.items[0].clone()),
     });
     press(&mut app, KeyCode::Left);
-    assert_eq!(app.screen, 2);
+    assert_eq!(app.screen, Screen::Search);
     assert!(app.playlist_target.is_none());
 }
 #[test]
 fn readonly_destination_and_cancelled_confirmation_never_emit_account_write() {
     let mut app = App::new(Config::default());
-    app.go(6);
+    app.go(Screen::Playlists);
     app.items.push(Track {
         id: "p.fixture".into(),
         kind: "library-playlists".into(),
@@ -415,7 +415,7 @@ fn readonly_destination_and_cancelled_confirmation_never_emit_account_write() {
 #[test]
 fn playlist_previous_page_preserves_private_cursor() {
     let mut app = App::new(Config::default());
-    app.go(6);
+    app.go(Screen::Playlists);
     app.previous = Some("music:pl:25".into());
     assert!(
         matches!(press(&mut app,KeyCode::PageUp),Some(Request::Browse{next:Some(ref cursor),..}) if cursor=="music:pl:25")
@@ -424,7 +424,7 @@ fn playlist_previous_page_preserves_private_cursor() {
 #[test]
 fn search_from_playlist_discards_previous_context_before_playing_result() {
     let mut app = App::new(Config::default());
-    app.go(6);
+    app.go(Screen::Playlists);
     app.playlist_view = Some(crate::catalog::playlist::PlaylistRef {
         id: "p.old".into(),
         storefront: "pl".into(),
@@ -476,4 +476,162 @@ fn delayed_playlist_write_ack_cannot_regress_subscribed_terminal_status() {
             .phase,
         "completed"
     );
+}
+
+#[test]
+fn clean_navigation_has_seven_destinations_and_lyrics_never_requests_artwork() {
+    let mut app = App::new(Config::default());
+    assert_eq!(
+        SCREENS,
+        &[
+            "Search",
+            "Library",
+            "Playlists",
+            "Queue",
+            "Now Playing",
+            "Lyrics",
+            "Settings"
+        ]
+    );
+    press(&mut app, KeyCode::Char('6'));
+    app.inspected_track = Some(Track {
+        id: "fixture".into(),
+        title: "Song".into(),
+        artist: "Artist".into(),
+        artwork: Some("https://is1-ssl.mzstatic.com/cover.jpg".into()),
+        ..Track::default()
+    });
+    assert!(app.artwork_request(Size::new(142, 39)).is_none());
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(142, 39)).unwrap();
+    terminal.draw(|f| app.render(f)).unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(text.contains("LYRICS"));
+    assert!(!text.contains("Loading artwork"));
+}
+
+#[test]
+fn escape_restores_search_after_settings_without_losing_results() {
+    let mut app = App::new(Config::default());
+    app.query = "remember".into();
+    app.items = vec![Track {
+        id: "one".into(),
+        title: "Preserved result".into(),
+        ..Track::default()
+    }];
+    press(&mut app, KeyCode::Char(','));
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.query, "remember");
+    assert_eq!(app.items.len(), 1);
+}
+
+#[test]
+fn failed_catalog_page_can_retry_without_discarding_results() {
+    let mut app = App::new(Config::default());
+    app.query = "song".into();
+    app.items = vec![Track {
+        id: "one".into(),
+        ..Track::default()
+    }];
+    app.next = Some("music:pl:25".into());
+    let request = press(&mut app, KeyCode::PageDown).unwrap();
+    app.request_failed(&request);
+    assert_eq!(app.items[0].id, "one");
+    assert!(
+        matches!(press(&mut app, KeyCode::Char('R')), Some(Request::Browse { next: Some(cursor), .. }) if cursor == "music:pl:25")
+    );
+}
+
+#[test]
+fn returning_to_pending_and_failed_search_preserves_retry_request() {
+    let mut app = App::new(Config::default());
+    app.query = "pending".into();
+    let request = Request::Browse {
+        kind: app.kind.clone(),
+        term: app.query.clone(),
+        next: Some("music:pl:25".into()),
+    };
+    app.browse_state = BrowseState::Loading;
+    app.browse_retry = Some(request.clone());
+    app.go(Screen::Settings);
+    assert!(
+        matches!(press(&mut app, KeyCode::Esc), Some(Request::Browse { next: Some(cursor), .. }) if cursor == "music:pl:25")
+    );
+    app.request_failed(&request);
+    app.go(Screen::Settings);
+    press(&mut app, KeyCode::Esc);
+    assert!(
+        matches!(press(&mut app, KeyCode::Char('R')), Some(Request::Browse { next: Some(cursor), .. }) if cursor == "music:pl:25")
+    );
+}
+
+#[test]
+fn lyrics_preview_and_scroll_survive_settings_round_trip() {
+    let mut app = App::new(Config::default());
+    app.screen = Screen::Lyrics;
+    app.inspected_track = Some(Track {
+        id: "preview".into(),
+        title: "Preview song".into(),
+        artist: "Artist".into(),
+        ..Track::default()
+    });
+    app.lyrics_scroll = Some(8);
+    app.go(Screen::Settings);
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.displayed_track().unwrap().id, "preview");
+    assert_eq!(app.lyrics_scroll, Some(8));
+}
+
+#[test]
+fn reconnect_clears_stale_disconnected_banner() {
+    let mut app = App::new(Config::default());
+    app.connected = false;
+    app.note = "Service disconnected; reconnecting…".into();
+    let status=serde_json::from_value(serde_json::json!({"playback":{},"queue_len":0,"current":null,"repeat":"off","shuffle":false,"profile":"balanced","pid":1,"browser_pid":null,"backend":"test","browser_shared":false,"uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null})).unwrap();
+    app.on_status(status);
+    assert!(app.connected);
+    assert!(!app.status_message().contains("disconnected"));
+}
+
+#[test]
+fn audio_failure_does_not_hide_command_input() {
+    let mut app = App::new(Config::default());
+    app.status = Some(serde_json::from_value(serde_json::json!({"playback":{},"queue_len":0,"current":null,"repeat":"off","shuffle":false,"profile":"balanced","pid":1,"browser_pid":null,"backend":"native","browser_shared":false,"uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null,"audio_error":"Playback failed"})).unwrap());
+    for screen in [Screen::Search, Screen::NowPlaying] {
+        app.screen = screen;
+        press(&mut app, KeyCode::Char(':'));
+        for c in "help".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| app.render(f)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains(":help"));
+        press(&mut app, KeyCode::Esc);
+    }
+}
+
+#[test]
+fn explicit_lyrics_preview_is_labeled_even_for_the_current_song() {
+    let mut app = App::new(Config::default());
+    app.status = Some(serde_json::from_value(serde_json::json!({"playback":{"track":{"id":"song","title":"Song"}},"queue_len":1,"current":0,"repeat":"off","shuffle":false,"profile":"balanced","pid":1,"browser_pid":null,"backend":"native","browser_shared":false,"uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null})).unwrap());
+    app.items = vec![Track {
+        id: "song".into(),
+        title: "Song".into(),
+        ..Track::default()
+    }];
+    press(&mut app, KeyCode::Char('l'));
+    assert!(app.lyrics_preview());
 }
