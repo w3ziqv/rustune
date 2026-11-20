@@ -358,7 +358,13 @@ impl App {
         let [heading, body] =
             Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area);
         f.render_widget(
-            Paragraph::new("SETTINGS\n↑/↓ choose · Enter/→ change · ←/Esc menu"),
+            Paragraph::new(concat!(
+                "SETTINGS · Rustune v",
+                env!("CARGO_PKG_VERSION"),
+                "\n",
+                env!("CARGO_PKG_REPOSITORY"),
+                "\n↑/↓ choose · Enter/→ change · ←/Esc menu"
+            )),
             heading,
         );
         let rows = self.settings_rows();
