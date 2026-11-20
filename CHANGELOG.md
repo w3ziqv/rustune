@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.4.0
+
+- Confirmed native seeks, occurrence-checked MPRIS SetPosition and navigation that preserves pause and stop.
+- Shared local diagnostics in Settings, `doctor` and `doctor --json`. The private helper protocol requires a matching pair of executables.
+- Independent socket limits for incoming frames, controls, catalog requests and subscribers, with bounded response writes.
+
+See the [v0.4 validation report](docs/validation/2026-11-19-transport.md) for offline, public network and subscribed playback results.
+
 ## v0.3.0 — 2026-11-17
 
 - Start in Search and switch between seven views. Albums and artists are search categories. Escape restores the previous view and selection.

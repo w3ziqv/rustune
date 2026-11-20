@@ -1,5 +1,7 @@
 # Validation
 
+[v0.4 transport, diagnostics and IPC validation](validation/2026-11-19-transport.md)
+
 [Clean TUI, artwork and native playback](validation/2026-11-15-clean-tui.md)
 
 ## Albums, queue and playlists — v0.2.0, 2026-11-10

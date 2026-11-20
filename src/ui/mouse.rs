@@ -8,7 +8,10 @@ impl App {
         match event.kind {
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
                 let down = event.kind == MouseEventKind::ScrollDown;
-                if matches!(self.screen, Screen::Lyrics | Screen::NowPlaying)
+                if self.screen == Screen::AudioInfo && shell.main.contains(point) {
+                    self.focus = Focus::Content;
+                    audio_info::scroll(self, down);
+                } else if matches!(self.screen, Screen::Lyrics | Screen::NowPlaying)
                     && player::lyrics_area(self, self.viewport).contains(point)
                 {
                     self.focus = Focus::Content;

@@ -1,5 +1,6 @@
 //! Event-driven terminal client. Only visible rows are constructed.
 mod album;
+mod audio_info;
 mod equalizer;
 #[cfg(test)]
 mod flow_tests;
@@ -13,6 +14,7 @@ use crate::{
     artwork::{self, CoverRequest, CoverResult},
     auth::{self, LocalAuth, TokenInput},
     config::{Config, Paths, PerformanceMode},
+    diagnostics,
     input::{Events, InputEvent as Event},
     ipc::{self, Request},
     keys,
@@ -158,6 +160,9 @@ pub struct App {
     token_input: Option<TokenInput>,
     auth_job: Option<LocalAuth>,
     token_stored: bool,
+    diagnostics: Option<diagnostics::Report>,
+    diagnostics_generation: u64,
+    audio_info_scroll: usize,
     lyrics_result: Option<LyricsResult>,
     lyrics_generation: u64,
     lyrics_scroll: Option<usize>,
@@ -226,6 +231,9 @@ impl App {
             token_input: None,
             auth_job: None,
             token_stored: false,
+            diagnostics: None,
+            diagnostics_generation: 0,
+            audio_info_scroll: 0,
             lyrics_result: None,
             lyrics_generation: 0,
             lyrics_scroll: None,
@@ -437,7 +445,15 @@ impl App {
             }
         }
     }
+    fn refresh_diagnostics(&mut self) {
+        self.diagnostics = None;
+        self.diagnostics_generation = self.diagnostics_generation.wrapping_add(1);
+        self.audio_info_scroll = 0;
+    }
     fn go(&mut self, screen: Screen) -> Option<Request> {
+        if screen == Screen::AudioInfo {
+            self.refresh_diagnostics();
+        }
         if screen != self.screen && screen != Screen::Lyrics && self.playlist_target.is_none() {
             self.remember_view();
         }
@@ -739,6 +755,10 @@ impl App {
                 KeyCode::F(5) if self.screen == Screen::Playlists => {
                     return Ok((false, Some(self.page_request())));
                 }
+                KeyCode::Char('R') if self.screen == Screen::AudioInfo => {
+                    self.refresh_diagnostics();
+                    return Ok((false, None));
+                }
                 KeyCode::Char('R')
                     if !matches!(self.screen, Screen::Lyrics | Screen::NowPlaying) =>
                 {
@@ -835,6 +855,14 @@ impl App {
             }
             return Ok((false, None));
         }
+        if self.screen == Screen::AudioInfo
+            && self.focus != Focus::Navigation
+            && matches!(action, Some("up" | "down"))
+        {
+            audio_info::scroll(self, action == Some("down"));
+            return Ok((false, None));
+        }
+
         let mut req = None;
         match action {
             Some("lyrics_follow") => self.lyrics_scroll = None,
@@ -1056,16 +1084,13 @@ impl App {
                 ));
             }
             Some("seek_back") | Some("seek_forward") => {
-                if let Some(s) = &self.status {
-                    req = Some(Request::Seek(
-                        (s.playback.position
-                            + if action == Some("seek_forward") {
-                                10.0
-                            } else {
-                                -10.0
-                            })
-                        .clamp(0.0, s.playback.duration),
-                    ));
+                if self.status.is_some() {
+                    let offset = if action == Some("seek_forward") {
+                        10_000_000
+                    } else {
+                        -10_000_000
+                    };
+                    req = Some(Request::SeekBy(offset));
                 }
             }
             Some("shuffle") => req = Some(Request::Shuffle),
@@ -1470,6 +1495,10 @@ impl App {
             self.render_settings(f, a, p);
             return;
         }
+        if self.screen == Screen::AudioInfo {
+            audio_info::render(self, f, a, p);
+            return;
+        }
         if self.screen == Screen::Lyrics {
             let [header, text] = player::standalone_lyrics_areas(a);
             let title = self.displayed_track().map_or_else(
@@ -1688,7 +1717,6 @@ impl App {
 
             Screen::NowPlaying=>self.status.as_ref().and_then(|s|s.playback.track.as_ref()).map_or("Nothing playing. No audio quality has been reported.".into(),|t|format!("NOW PLAYING\n\n{}\n{}\n{}\n\n{}\n\nSpace  Play/pause\nAlt-← / →  Seek 10 seconds\n+ / -  Volume\nn / p  Next / previous\ns      Shuffle\nr      Repeat\nm      Mute\n\n:sleep MINUTES sets a sleep timer (0 cancels).",t.title,t.artist,t.album,self.status.as_ref().map(|s|s.playback.quality_label()).unwrap_or_default())),
 
-            Screen::AudioInfo=>format!("AUDIO INFORMATION\n\nQuality is selected by the backend.\nManual quality selection and lossless playback are unavailable.\n\nBackend: {}\n{}\n\nSource bit depth: unknown.\nOutput device format does not establish source quality.\n\nEsc returns to Settings.",self.status.as_ref().map_or("Not running",|s|s.backend.as_str()),self.status.as_ref().map_or("Source quality unknown".into(),|s|s.playback.quality_label())),
             Screen::Settings=>format!("SETTINGS\n\nTheme: {}\nResources: {:?}\n\n:theme dark | light | catppuccin_mocha | catppuccin_latte\n:theme gruvbox | nord | monochrome | tokyo_night | custom\n:profile minimal | balanced | enhanced\n\n~/.config/rustune/config.toml\nKeybindings, custom colors, notifications, mouse\nand daemon behavior can be configured there.\n\n:login  :logout  :sleep MINUTES  :clear  :history\nDaemon mode keeps playback running when the TUI closes.",self.config.theme,self.status.as_ref().map_or(self.config.performance,|s|s.profile)),
             _=>{let mut s="HELP · YOUR BINDINGS\n\n".to_owned();for (action,default) in keys::DEFAULTS {let key = self.config.keybindings.get(*action).map_or(*default, String::as_str);s.push_str(&format!("{key:<12}{action}   "));if s.lines().last().is_some_and(|l|l.len()>65){s.push('\n');}}s.push_str("\n\n←/Esc menu · ↑/↓ choose · Enter/→ open. Tab cycles focus.\nAlbums: Enter opens; a opens whole-album actions. Songs: Enter opens actions. Settings: ↑/↓ then Enter changes a value.\nSearch: Tab/F2 changes songs/albums/artists/My library. PgUp/PgDn changes pages.\nEQ: e opens; ↑/↓ selects; ←/→ edits; b bypasses; r resets.\n← returns from an album or lyrics to previous results. Alt-←/→ seeks.\nQueue: Delete removes and advances; J/K reorder; :clear upcoming; u Undo.\nCommands: :stop :undo :cancel :retry :login :logout :profile MODE :theme NAME\n:sleep MINUTES :recent :history :queue :audio :help\nCtrl-C always exits. ~/.config/rustune/config.toml customizes bindings.");s}
         };
@@ -1740,7 +1768,8 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
     });
     let worker = tokio::spawn(runtime::requests(worker_paths, work, done));
     let (updates, mut status) = mpsc::channel::<Result<Status>>(1);
-    let subscription = tokio::spawn(runtime::subscribe(paths, updates));
+    let subscription = tokio::spawn(runtime::subscribe(paths.clone(), updates));
+    let mut diagnostic_check = tokio::task::JoinSet::new();
     // Fullscreen pixels need their RGB foreground/background pairs, including
     // with the monochrome UI theme. Inherited NO_COLOR otherwise turns covers
     // into unrecognizable block glyphs. This only affects the TUI process.
@@ -1764,6 +1793,11 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
         let mut next_frame = tokio::time::Instant::now();
         loop {
             app.viewport=terminal.size()?;
+            if app.screen == Screen::AudioInfo && app.diagnostics.is_none() && diagnostic_check.is_empty() {
+                let paths = paths.clone();
+                let generation = app.diagnostics_generation;
+                diagnostic_check.spawn(async move { (generation, diagnostics::inspect(&paths).await) });
+            }
             if let Some(job)=app.auth_job.take() && auth_jobs.try_send(job).is_err(){app.note="Token storage is busy; try login again.".into();}
             let request=app.artwork_request(terminal.size()?);
             if request!=last_artwork {
@@ -1784,7 +1818,25 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                 _=hangup.recv()=>break,
                 _=resize.recv()=>{dirty=true;},
                 Some(result)=lyric_results.recv()=>{dirty=true;if Some(&result.request)==last_lyrics.as_ref(){app.accept_lyrics(result);}},
-                Some(result)=auth_results.recv()=>{dirty=true;match result{Some(saved)=>{app.token_stored=saved;app.note=if saved{auth::SAVED_MESSAGE.into()}else{"Local token removed; Apple account authorization unchanged.".into()};},None=>app.note="Could not update the private token file; check config-directory permissions.".into()}},
+                Some(result) = auth_results.recv() => {
+                    dirty = true;
+                    match result {
+                        Some(saved) => {
+                            app.token_stored = saved;
+                            app.refresh_diagnostics();
+                            app.note = if saved { auth::SAVED_MESSAGE.into() } else {
+                                "Local token removed; Apple account authorization unchanged.".into()
+                            };
+                        }
+                        None => app.note = "Could not update the private token file; check config-directory permissions.".into(),
+                    }
+                }
+                Some(result) = diagnostic_check.join_next(), if !diagnostic_check.is_empty() => {
+                    if let Ok((generation, report)) = result && generation == app.diagnostics_generation {
+                        app.diagnostics = Some(report);
+                        dirty = true;
+                    }
+                }
                 Some(cover)=covers.recv()=>{dirty=true;if Some(&cover.request)==last_artwork.as_ref(){app.accept_artwork(cover);}}
                 event=events.next()=>{
                     dirty=true;
@@ -1816,6 +1868,9 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                     Ok(s) => {
                         dirty |= !app.connected || runtime::redraw_needed(app.status.as_ref(), &s, app.screen == Screen::Equalizer);
                         let reconnect = !app.connected;
+                        if reconnect {
+                            app.refresh_diagnostics();
+                        }
                         let refresh = app.on_status(s);
                         let refresh = if reconnect && matches!(app.screen,Screen::Queue | Screen::Library | Screen::Playlists | Screen::Search) && (app.screen != Screen::Search || !app.query.is_empty()) {
                             Some(app.page_request())
@@ -1824,7 +1879,14 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                             app.note = "Command queue is full; reopen Queue to refresh.".into();
                         }
                     },
-                    Err(_) => { dirty |= app.connected; app.connected=false; app.note="Service disconnected; reconnecting…".into(); },
+                    Err(_) => {
+                        if app.connected {
+                            dirty = true;
+                            app.refresh_diagnostics();
+                        }
+                        app.connected = false;
+                        app.note = "Service disconnected; reconnecting…".into();
+                    },
                 }
             }
         }Ok::<(),anyhow::Error>(())

@@ -10,6 +10,7 @@ use zbus::{
     Connection, fdo,
     wire::{OwnedObjectPath, OwnedVariant as OwnedValue, Str},
 };
+const TRACK_PREFIX: &str = "/io/github/w3ziqv/Rustune/track/";
 const PATH: &str = "/org/mpris/MediaPlayer2";
 #[derive(Clone)]
 struct Root {
@@ -60,49 +61,59 @@ async fn control(tx: &Sender, r: Request) -> fdo::Result<()> {
         .map(|_| ())
         .map_err(|e| fdo::Error::Failed(e.to_string()))
 }
+fn loop_name(value: Repeat) -> &'static str {
+    match value {
+        Repeat::Off => "None",
+        Repeat::All => "Playlist",
+        Repeat::One => "Track",
+    }
+}
 fn track_path(state: &Status) -> OwnedObjectPath {
-    let id = state
-        .current_entry_id
-        .map_or("none".into(), |id| id.to_string());
-    OwnedObjectPath::try_from(format!("/org/mpris/MediaPlayer2/track/{id}"))
-        .expect("sanitized MPRIS object path")
+    let path = state.current_entry_id.map_or_else(
+        || "/org/mpris/MediaPlayer2/TrackList/NoTrack".to_string(),
+        |id| format!("{TRACK_PREFIX}{id}"),
+    );
+    OwnedObjectPath::try_from(path).expect("numeric MPRIS track ID")
 }
 #[zbus::interface(name = "org.mpris.MediaPlayer2.Player")]
 impl Player {
     async fn next(&self) -> fdo::Result<()> {
-        control(&self.tx, Request::Next).await
+        control(&self.tx, Request::MprisNext).await
     }
     async fn previous(&self) -> fdo::Result<()> {
-        control(&self.tx, Request::Previous).await
+        control(&self.tx, Request::MprisPrevious).await
     }
     async fn pause(&self) -> fdo::Result<()> {
-        control(&self.tx, Request::Pause).await
+        control(&self.tx, Request::MprisPause).await
     }
     async fn play_pause(&self) -> fdo::Result<()> {
-        control(&self.tx, Request::Toggle).await
+        control(&self.tx, Request::MprisToggle).await
     }
     async fn stop(&self) -> fdo::Result<()> {
         control(&self.tx, Request::StopAudio).await
     }
     async fn play(&self) -> fdo::Result<()> {
-        control(&self.tx, Request::Play).await
+        control(&self.tx, Request::MprisPlay).await
     }
     async fn seek(&self, offset: i64) -> fdo::Result<()> {
-        let v = {
-            let state = self.state.borrow();
-            let p = &state.playback;
-            (p.position + offset as f64 / 1_000_000.0).clamp(0.0, p.duration)
-        };
-        control(&self.tx, Request::Seek(v)).await
+        control(&self.tx, Request::RelativeSeek(offset)).await
     }
     async fn set_position(&self, track_id: OwnedObjectPath, position: i64) -> fdo::Result<()> {
-        let state = self.state.borrow().clone();
-        if position < 0 || track_id != track_path(&state) {
+        let Some(id) = track_id.as_str().strip_prefix(TRACK_PREFIX) else {
+            return Ok(());
+        };
+        let Ok(entry_id) = id.parse::<u64>() else {
+            return Ok(());
+        };
+        if id != entry_id.to_string() {
             return Ok(());
         }
         control(
             &self.tx,
-            Request::Seek((position as f64 / 1_000_000.0).min(state.playback.duration)),
+            Request::SetPosition {
+                entry_id,
+                position_us: position,
+            },
         )
         .await
     }
@@ -113,22 +124,11 @@ impl Player {
     }
     #[zbus(property)]
     fn playback_status(&self) -> &str {
-        let s = self.state.borrow();
-        if s.playback.playing {
-            "Playing"
-        } else if s.playback.phase == crate::model::PlaybackPhase::Paused {
-            "Paused"
-        } else {
-            "Stopped"
-        }
+        self.state.borrow().playback_status()
     }
-    #[zbus(property)]
+    #[zbus(property(emits_changed_signal = "false"))]
     fn loop_status(&self) -> &str {
-        match self.state.borrow().repeat {
-            Repeat::Off => "None",
-            Repeat::All => "Playlist",
-            Repeat::One => "Track",
-        }
+        loop_name(self.state.borrow().repeat)
     }
     #[zbus(property)]
     async fn set_loop_status(&self, value: &str) -> fdo::Result<()> {
@@ -138,21 +138,9 @@ impl Player {
             "Track" => Repeat::One,
             _ => return Err(fdo::Error::InvalidArgs("invalid loop status".into())),
         };
-        let mut current = self.state.borrow().repeat;
-        for _ in 0..3 {
-            if current == desired {
-                break;
-            }
-            control(&self.tx, Request::Repeat).await?;
-            current = match current {
-                Repeat::Off => Repeat::All,
-                Repeat::All => Repeat::One,
-                Repeat::One => Repeat::Off,
-            };
-        }
-        Ok(())
+        control(&self.tx, Request::SetRepeat(desired)).await
     }
-    #[zbus(property)]
+    #[zbus(property(emits_changed_signal = "const"))]
     fn rate(&self) -> f64 {
         1.0
     }
@@ -164,17 +152,13 @@ impl Player {
             Err(fdo::Error::NotSupported("playback rate is fixed".into()))
         }
     }
-    #[zbus(property)]
+    #[zbus(property(emits_changed_signal = "false"))]
     fn shuffle(&self) -> bool {
         self.state.borrow().shuffle
     }
     #[zbus(property)]
     async fn set_shuffle(&self, value: bool) -> fdo::Result<()> {
-        let current = self.state.borrow().shuffle;
-        if value != current {
-            control(&self.tx, Request::Shuffle).await?;
-        }
-        Ok(())
+        control(&self.tx, Request::SetShuffle(value)).await
     }
     #[zbus(property)]
     fn metadata(&self) -> HashMap<String, OwnedValue> {
@@ -184,10 +168,14 @@ impl Player {
             if let Ok(v) = OwnedValue::try_from(zbus::wire::Variant::from(track_path(&s))) {
                 m.insert("mpris:trackid".into(), v);
             }
-            m.insert(
-                "mpris:length".into(),
-                OwnedValue::from(t.duration_ms.saturating_mul(1000).min(i64::MAX as u64) as i64),
-            );
+            let length = if s.playback.duration > 0.0 {
+                crate::model::micros(s.playback.duration)
+            } else {
+                t.duration_ms.saturating_mul(1000).min(i64::MAX as u64) as i64
+            };
+            if length > 0 {
+                m.insert("mpris:length".into(), OwnedValue::from(length));
+            }
             m.insert(
                 "xesam:title".into(),
                 OwnedValue::from(Str::from(t.title.clone())),
@@ -209,17 +197,17 @@ impl Player {
         }
         m
     }
-    #[zbus(property)]
+    #[zbus(property(emits_changed_signal = "false"))]
     fn volume(&self) -> f64 {
         self.state.borrow().playback.volume
     }
     #[zbus(property)]
     async fn set_volume(&self, v: f64) -> fdo::Result<()> {
-        control(&self.tx, Request::Volume(v)).await
+        control(&self.tx, Request::Volume(v.max(0.0))).await
     }
-    #[zbus(property)]
+    #[zbus(property(emits_changed_signal = "false"))]
     fn position(&self) -> i64 {
-        (self.state.borrow().playback.position * 1_000_000.0) as i64
+        crate::model::micros(self.state.borrow().playback.position)
     }
     #[zbus(property)]
     fn minimum_rate(&self) -> f64 {
@@ -231,38 +219,41 @@ impl Player {
     }
     #[zbus(property)]
     fn can_go_next(&self) -> bool {
-        let s = self.state.borrow();
-        s.start_available && s.can_next
+        self.state.borrow().can_go_next()
     }
     #[zbus(property)]
     fn can_go_previous(&self) -> bool {
-        let s = self.state.borrow();
-        s.start_available && s.can_previous
+        self.state.borrow().can_go_previous()
     }
     #[zbus(property)]
     fn can_play(&self) -> bool {
-        let s = self.state.borrow();
-        s.audio_pid.is_some() || (s.start_available && s.queue_len > 0)
+        self.state.borrow().can_play()
     }
     #[zbus(property)]
     fn can_pause(&self) -> bool {
-        let s = self.state.borrow();
-        s.audio_pid.is_some() && s.playback.track.is_some()
+        self.state.borrow().can_pause()
     }
     #[zbus(property)]
     fn can_seek(&self) -> bool {
-        let s = self.state.borrow();
-        s.audio_pid.is_some() && s.playback.duration > 0.0
+        self.state.borrow().can_seek()
     }
-    #[zbus(property)]
+    #[zbus(property(emits_changed_signal = "const"))]
     fn can_control(&self) -> bool {
-        self.state.borrow().playback_available
+        true
     }
     #[zbus(signal)]
     async fn seeked(
         emitter: &zbus::object_server::SignalEmitter<'_>,
         position: i64,
     ) -> zbus::Result<()>;
+}
+
+pub(crate) async fn emit_seeked(connection: &Connection, position: i64) -> zbus::Result<()> {
+    let interface = connection
+        .object_server()
+        .interface::<_, Player>(PATH)
+        .await?;
+    Player::seeked(interface.signal_emitter(), position).await
 }
 
 pub async fn start(
@@ -294,57 +285,60 @@ pub(crate) async fn start_at(
         .build()
         .await?;
     let bus = connection.clone();
+    let mut old = state.borrow_and_update().clone();
     let task = tokio::spawn(async move {
-        let mut old = state.borrow().clone();
         while state.changed().await.is_ok() {
             let new = state.borrow_and_update().clone();
             if let Ok(interface) = bus.object_server().interface::<_, Player>(PATH).await {
                 let player = interface.get().await;
                 let emitter = interface.signal_emitter();
-                if old.playback.playing != new.playback.playing
-                    || old.playback.phase != new.playback.phase
-                    || old.playback.track != new.playback.track
-                {
+                if old.playback_status() != new.playback_status() {
                     let _ = player.playback_status_changed(emitter).await;
                 }
                 if old.playback.track != new.playback.track
                     || old.current_entry_id != new.current_entry_id
+                    || old.playback.duration != new.playback.duration
                 {
                     let _ = player.metadata_changed(emitter).await;
                 }
-                if (old.playback.volume - new.playback.volume).abs() > 0.001 {
-                    let _ = player.volume_changed(emitter).await;
+                // Publish from the service snapshot for writes from every entry point.
+                // Automatic setter notifications would send a second, possibly stale value.
+                let mut changed = HashMap::new();
+                if old.playback.volume != new.playback.volume {
+                    changed.insert("Volume", new.playback.volume.into());
                 }
                 if old.shuffle != new.shuffle {
-                    let _ = player.shuffle_changed(emitter).await;
+                    changed.insert("Shuffle", new.shuffle.into());
                 }
                 if old.repeat != new.repeat {
-                    let _ = player.loop_status_changed(emitter).await;
+                    changed.insert("LoopStatus", loop_name(new.repeat).into());
                 }
-                if old.can_next != new.can_next || old.start_available != new.start_available {
+                if !changed.is_empty() {
+                    let _ = fdo::Properties::properties_changed(
+                        emitter,
+                        zbus::names::InterfaceName::from_static_str(
+                            "org.mpris.MediaPlayer2.Player",
+                        )
+                        .expect("static interface name"),
+                        changed,
+                        Default::default(),
+                    )
+                    .await;
+                }
+                if old.can_go_next() != new.can_go_next() {
                     let _ = player.can_go_next_changed(emitter).await;
                 }
-                if old.can_previous != new.can_previous
-                    || old.start_available != new.start_available
-                {
+                if old.can_go_previous() != new.can_go_previous() {
                     let _ = player.can_go_previous_changed(emitter).await;
                 }
-                if old.audio_pid != new.audio_pid
-                    || old.start_available != new.start_available
-                    || old.queue_len != new.queue_len
-                    || old.playback.phase != new.playback.phase
-                {
+                if old.can_play() != new.can_play() {
                     let _ = player.can_play_changed(emitter).await;
+                }
+                if old.can_pause() != new.can_pause() {
                     let _ = player.can_pause_changed(emitter).await;
-                    let _ = player.can_control_changed(emitter).await;
                 }
-                if old.audio_pid != new.audio_pid || old.playback.duration != new.playback.duration
-                {
+                if old.can_seek() != new.can_seek() {
                     let _ = player.can_seek_changed(emitter).await;
-                }
-                if (new.playback.position - old.playback.position).abs() > 3.0 {
-                    let _ =
-                        Player::seeked(emitter, (new.playback.position * 1_000_000.0) as i64).await;
                 }
             }
             old = new;
@@ -395,7 +389,7 @@ mod capability_tests {
         let (tx, _) = tokio::sync::mpsc::channel(1);
         let (_, state) = watch::channel(status);
         let player = Player { tx, state };
-        assert!(!player.can_control());
+        assert!(player.can_control());
         assert!(!player.can_play());
         assert!(!player.can_pause());
         assert!(!player.can_seek());
@@ -403,3 +397,6 @@ mod capability_tests {
         assert!(!player.can_go_previous());
     }
 }
+
+#[cfg(test)]
+mod transport_tests;

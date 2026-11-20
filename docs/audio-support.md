@@ -8,7 +8,7 @@
 | Private song library | Accepted Media User Token enables listing/search and account region |
 | Personal playlists/recent history | Not implemented |
 | Transport | Play/pause, Next/Previous, seek, software volume/mute, sleep timer and MPRIS |
-| Source quality | Decoder-reported codec, sample rate and channels;256kb/s is a reported target |
+| Source quality | Decoder-reported codec, sample rate and channel count. Source bitrate and bit depth remain unknown |
 | Bit depth/lossless/Atmos | Unknown or unsupported; output format does not prove source format |
 | Equalizer | Ten independent stereo bands, preamp, presets, bypass, headroom and live smoothing |
 | Visualizer/crossfade/gapless guarantees | Unavailable |

@@ -27,8 +27,12 @@ struct Cli {
 enum Commands {
     #[command(hide = true)]
     AudioWorker,
-    /// Diagnose private token storage and native playback capabilities
-    Doctor,
+    /// Check local token storage and playback prerequisites
+    Doctor {
+        /// Print the diagnostic report as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Measure application RSS, PSS and sampled CPU as JSON
     Stats {
         #[arg(long, default_value_t = 1)]
@@ -119,8 +123,12 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let paths = Paths::discover()?;
+    let command = match cli.command {
+        Some(Commands::Doctor { json }) => return doctor(&paths, json).await,
+        other => other,
+    };
     let config = Config::load(&paths)?;
-    match cli.command {
+    match command {
         Some(Commands::AudioWorker) => rustune::backend::worker::run(&paths).await?,
         Some(Commands::Login) => rustune::auth::prompt_login(&paths)?,
         Some(Commands::Logout) => {
@@ -129,7 +137,6 @@ async fn main() -> Result<()> {
                 "Local Music User Token removed. Apple account authorization was not changed."
             );
         }
-        Some(Commands::Doctor) => doctor(&config, &paths).await?,
         Some(Commands::Stats { seconds }) => {
             anyhow::ensure!((1..=60).contains(&seconds), "seconds must be 1..60");
             println!(
@@ -419,52 +426,23 @@ async fn ensure_service(paths: &Paths) -> Result<Option<tokio::process::Child>> 
     let _ = child.kill().await;
     anyhow::bail!("service failed to start; run rustune daemon for diagnostics")
 }
-async fn doctor(config: &Config, paths: &Paths) -> Result<()> {
+async fn doctor(paths: &Paths, json: bool) -> Result<()> {
+    let report = rustune::diagnostics::inspect(paths).await;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
     println!(
-        "Rustune {} • Linux {}",
+        "Rustune {} · Linux {}",
         env!("CARGO_PKG_VERSION"),
         std::env::consts::ARCH
     );
-    println!("Profile: {:?}", config.performance);
-    println!(
-        "Music User Token: {}",
-        if rustune::auth::has_user_token(paths) {
-            "private local file present; Apple account acceptance NOT VERIFIED"
-        } else {
-            "not saved; run rustune login"
-        }
-    );
-    println!(
-        "Native playback: CDM → AAC → ALSA; {}",
-        if rustune::backend::worker::available(paths) {
-            "token, CDM and audio helper present; live authorization is checked on Play"
-        } else {
-            "save a token, install sibling rustune-audio and a compatible CDM at ~/.cache/rustune/drm/libwidevinecdm.so"
-        }
-    );
-    println!("Audio source quality: unknown");
-    println!(
-        "Public catalog: Apple Music metadata, fallback country {} (account region when verified)",
-        config.catalog_country
-    );
-    println!(
-        "Personal library/playlists: Music User Token required; writes need explicit commands"
-    );
-    println!("Lyrics: free LRCLIB; Artwork: public Apple cover URLs");
-    println!("XDG runtime: {}", paths.runtime.display());
-    println!(
-        "Session D-Bus: {}",
-        if zbus::Connection::session().await.is_ok() {
-            "connected"
-        } else {
-            "unavailable"
-        }
-    );
-    if let Ok(v) = ipc::request(paths, &Request::Status).await {
-        let status: Status = serde_json::from_value(v)?;
-        println!("Service: PID {}; {}", status.pid, status.backend);
-    } else {
-        println!("Service: not running");
+    for line in report.checks() {
+        println!("{line}");
+    }
+    println!("{}", report.source_quality());
+    for step in report.next_steps() {
+        println!("• {step}");
     }
     Ok(())
 }

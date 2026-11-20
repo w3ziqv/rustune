@@ -52,6 +52,10 @@ pub struct Playback {
     pub decoded_audio_frames: u64,
     pub nonzero_output_samples: u64,
 }
+pub(crate) fn micros(seconds: f64) -> i64 {
+    (seconds * 1_000_000.0).round() as i64
+}
+
 impl Playback {
     pub fn quality_label(&self) -> String {
         if let (Some(codec), Some(rate), Some(channels)) = (
@@ -59,12 +63,14 @@ impl Playback {
             self.source_sample_rate_hz,
             self.source_channels,
         ) {
-            return format!(
-                "{codec} · {:.1} kHz · {channels} ch · reported target {} kb/s",
-                f64::from(rate) / 1000.0,
-                self.target_bitrate_kbps
-                    .map_or("unknown".into(), |v| v.to_string())
+            let format = format!(
+                "{codec} · {:.1} kHz · {channels} ch",
+                f64::from(rate) / 1000.0
             );
+            return match self.target_bitrate_kbps {
+                Some(target) => format!("{format} · reported target {target} kb/s"),
+                None => format,
+            };
         }
         match self.target_bitrate_kbps {
             Some(n @ (64 | 256)) => format!("Reported target {n} kb/s · source quality unknown"),

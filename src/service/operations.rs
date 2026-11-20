@@ -514,6 +514,18 @@ impl Engine {
             }
         }
     }
+    pub(super) fn cancel_deferred_play(&mut self) -> Result<()> {
+        if let Some(prep) = &self.preparing
+            && matches!(
+                prep.action,
+                AlbumAction::Play { .. } | AlbumAction::PlayFromPosition { .. }
+            )
+        {
+            let key = prep.key.clone();
+            self.cancel_operation(&key)?;
+        }
+        Ok(())
+    }
     pub(super) fn cancel_operation(&mut self, key: &str) -> Result<()> {
         ensure!(
             self.pending.as_ref().is_none_or(|p| p.key != key),

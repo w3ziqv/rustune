@@ -224,9 +224,9 @@ fn equalizer_preserves_modified_seek_bindings_and_plain_arrows_edit_bands() {
     app.go(Screen::Equalizer);
     app.eq_selected = 2;
     app.status = Some(serde_json::from_value(serde_json::json!({"playback":{"position":50.0,"duration":120.0},"queue_len":0,"current":null,"repeat":"off","shuffle":false,"profile":"balanced","pid":1,"browser_pid":null,"backend":"test","browser_shared":false,"uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null})).unwrap());
-    for (key, expected) in [(KeyCode::Right, 60.0), (KeyCode::Left, 40.0)] {
+    for (key, expected) in [(KeyCode::Right, 10_000_000), (KeyCode::Left, -10_000_000)] {
         let request = app.key(KeyEvent::new(key, KeyModifiers::ALT)).unwrap().1;
-        assert!(matches!(request, Some(Request::Seek(position)) if position==expected));
+        assert!(matches!(request, Some(Request::SeekBy(offset)) if offset==expected));
         assert_eq!(app.config.equalizer.bands_db[0], 0.0);
     }
     assert!(matches!(
@@ -634,4 +634,52 @@ fn explicit_lyrics_preview_is_labeled_even_for_the_current_song() {
     }];
     press(&mut app, KeyCode::Char('l'));
     assert!(app.lyrics_preview());
+}
+
+#[tokio::test]
+async fn audio_information_shows_local_checks_without_claiming_playback() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths {
+        config: dir.path().join("config"),
+        data: dir.path().join("data"),
+        cache: dir.path().join("cache"),
+        runtime: dir.path().join("runtime"),
+    };
+    crate::config::private_write(&paths.config.join("music-user-token"), b"fixture-token").unwrap();
+    let mut app = App::new(Config::default());
+    app.go(Screen::Settings);
+    app.selected = app
+        .settings_rows()
+        .iter()
+        .position(|row| row == "Audio information")
+        .unwrap();
+    assert!(press(&mut app, KeyCode::Enter).is_none());
+    assert_eq!(app.screen, Screen::AudioInfo);
+    app.diagnostics = Some(crate::diagnostics::inspect(&paths).await);
+
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    terminal.draw(|frame| app.render(frame)).unwrap();
+    let buffer = terminal.backend().buffer();
+    let rendered = (0..30)
+        .map(|y| {
+            (0..100)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("saved locally · account acceptance unverified"));
+    assert!(rendered.contains("CDM file: missing"));
+    assert!(rendered.contains("Audio helper:"));
+    assert!(rendered.contains("Service: not running"));
+    assert!(rendered.contains("Session D-Bus:"));
+    assert!(rendered.contains("Source quality unknown"));
+    assert!(rendered.contains("drm/libwidevinecdm.so"));
+    assert!(!rendered.contains("fixture-token"));
+    press(&mut app, KeyCode::Down);
+    assert_eq!(app.audio_info_scroll, 1);
+    assert!(press(&mut app, KeyCode::Char('R')).is_none());
+    assert!(app.diagnostics.is_none());
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.screen, Screen::Settings);
 }

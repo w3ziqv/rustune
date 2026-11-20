@@ -4,7 +4,12 @@ The event-driven Ratatui client uses bounded input parsing, a private Unix socke
 and a current-thread Tokio service. Queue operations are canonical in the service,
 persist atomically, and publish status updates to subscribed clients. Queue
 revisions invalidate visible pages after external edits without a feedback loop.
-Invalid offsets reset after shrink. MPRIS exposes honest capabilities.
+Invalid offsets reset after shrink.
+
+The socket validates peer UID and the 64 KiB request length before reading the
+body. Up to 16 new connections can read for five seconds. Parsed requests use
+separate pools for four catalog lookups, eight subscriptions and 16 ordinary
+commands. Each response frame has a 4 MiB limit and a two-second write deadline.
 
 Token entry stays in the CLI/TUI process and uses zeroizing secret buffers.
 Dots/count are derived locally; actual token content is never rendered or sent
@@ -21,7 +26,17 @@ of an unrelated playing track. Rendering constructs visible rows only.
 
 Native playback runs in the owned sibling `rustune-audio` executable, using inherited
 private command/event pipes. Only public song IDs and bounded controls cross
-those pipes. The worker reads the private user token itself and retrieves the
+those pipes. Both processes negotiate protocol 2 with a framed Hello before
+Prepare. Each applied seek carries its request ID and playback position. The
+service accepts acknowledgements from the current helper generation in order,
+including the final applied request in a coalesced series. MPRIS emits Seeked
+from these events. CanControl describes the writable desktop interface. CanPlay,
+CanPause, CanSeek and the navigation properties report the service’s current
+capabilities. The service probes the helper again when its executable changes.
+Position and CanControl changes produce no PropertiesChanged notification.
+See the [MPRIS Player specification](https://specifications.freedesktop.org/mpris/latest/Player_Interface.html).
+
+The worker reads the private user token itself and retrieves the
 public application authorization anonymously from allowlisted Apple HTTPS
 origins. Authenticated playback/license requests never follow redirects and
 credentials are never sent to artwork, lyrics or media CDN hosts.
@@ -39,8 +54,8 @@ not establish completion: decoder errors abort, and the submitted end position
 must match the full manifest duration. After the real output ring empties, the
 worker exits and is reaped before queue advancement. Pause/seek remain active
 during final draining. Active transport stays controllable after local logout.
-Source codec/rate/channels are decoder fields; target bitrate is explicitly
-reported, and source bit depth/lossless support remain unknown/unavailable.
+Source codec, rate and channel count come from the decoder. Source bitrate
+and bit depth remain unknown.
 
 Public catalog metadata is separate from the playback capability. A bounded
 Apple Music catalog client (with iTunes fallback) runs in IPC client tasks, so a slow metadata request

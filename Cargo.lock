@@ -2026,13 +2026,14 @@ dependencies = [
 
 [[package]]
 name = "rustune"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "base64",
  "clap",
  "crossterm",
  "fastrand",
+ "futures-util",
  "httpdate",
  "image",
  "nix",
@@ -2054,7 +2055,7 @@ dependencies = [
 
 [[package]]
 name = "rustune-audio"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "alsa",
  "anyhow",
@@ -2071,7 +2072,7 @@ dependencies = [
 
 [[package]]
 name = "rustune-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "base64",

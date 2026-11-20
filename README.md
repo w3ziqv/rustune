@@ -35,7 +35,7 @@ Rustune is experimental. A saved token means **saved locally**, not authenticate
 
 </details>
 
-Screenshots and their validation context are recorded in the [current validation report](docs/validation/2026-11-15-clean-tui.md). The layout is inspired by [Yami](https://github.com/Trendorin/yami); Rustune remains a terminal application.
+Screenshots and their validation context are recorded in the [v0.3 screenshot report](docs/validation/2026-11-15-clean-tui.md). The layout is inspired by [Yami](https://github.com/Trendorin/yami); Rustune remains a terminal application.
 
 ## Installation
 
@@ -49,6 +49,8 @@ rustune init
 rustune login
 rustune
 ```
+
+Run `rustune doctor` to check the installed pair, token storage, CDM, service and session D-Bus. Use `rustune doctor --json` for scripts or open **Settings → Audio information** in the TUI.
 
 Keep both executables together. The build script verifies and builds a private minimal FFmpeg; it does not replace system libraries. A standard `cargo build --locked --release` can instead use system FFmpeg 9 development libraries.
 
@@ -79,6 +81,14 @@ Upgrades preserve existing explicit theme preferences, credentials and queue dat
 
 These are defaults; Help reflects remapped keys. Numeric destinations changed from earlier versions: Queue is now `4`, Now Playing `5`, and Lyrics `6`. Playlist account writes still require explicit actions and confirmation: see [playlist controls](docs/playlists.md).
 
+## Desktop playback controls
+
+MPRIS Stop releases the audio helper. Play restarts the selected song at zero.
+Next and Previous keep the player paused or stopped when changing songs.
+In the TUI, Previous still restarts the current song after three seconds.
+MPRIS Seeked reports the position confirmed by the active helper, including
+short and paused seeks. SetPosition uses the queue occurrence ID in Metadata.
+
 ## Settings
 
 **Settings → Pixelated artwork** switches between halfblocks and regular images. **Show artwork** disables images entirely. Minimal mode also disables cover loading. Regular images require a supported terminal protocol and detected cell geometry; Sixel and unverified multiplexer passthrough are unavailable.
@@ -91,15 +101,15 @@ Lyrics come from LRCLIB using song metadata, without Apple credentials. Missing,
 
 Measurements include the TUI, service and audio/CDM helper; the terminal renderer is accounted for separately when testing regular images. RSS counts shared mappings more than once; PSS is the primary physical-memory comparison.
 
-| Balanced profile, three runs | Previous mean PSS | Current mean PSS |
+| Balanced profile, three runs | Pre-redesign mean PSS | v0.3 mean PSS |
 |---|---:|---:|
-| Idle, Search open on the current build | 7.87 MiB | 8.39 MiB |
+| Idle, Search open | 7.87 MiB | 8.39 MiB |
 | Playback, pixelated cover with repeated resizes | 133.77 MiB | 132.20 MiB |
 | Playback, artwork off | 131.52 MiB | 131.27 MiB |
 
 Regular images in Kitty averaged 136.37 MiB native PSS on this machine. The terminal process adds its own memory cost.
 
-See the [current before/after measurements](docs/validation/2026-11-15-clean-tui.md) and [methodology and historical results](docs/benchmarking.md). Measurements are observations on one machine, not a promised memory ceiling. An idle TUI figure does not describe active DRM playback.
+See the [v0.3 before/after measurements](docs/validation/2026-11-15-clean-tui.md) and [methodology and historical results](docs/benchmarking.md). Measurements are observations on one machine, not a promised memory ceiling. An idle TUI figure does not describe active DRM playback.
 
 ## Development
 

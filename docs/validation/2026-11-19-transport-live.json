@@ -1,0 +1,49 @@
+{
+  "track_id": "1474834623",
+  "rustune_sha256": "22900af3b07aee4694bf44d64543f7303118d97a014e832586e03b2034b493ca",
+  "audio_sha256": "03b6a6577711979b111f1e16d8e3cabd51fa32351b2e3e6e2a23781541531ac5",
+  "natural_end": true,
+  "paused_seek_ack_us": [
+    3134694,
+    2113016
+  ],
+  "end_seek_ack_us": 93994550,
+  "first_position": 0.0,
+  "source_codec": "AAC",
+  "end_position": 94.01759637188208,
+  "duration": 93.99455,
+  "encrypted_packets": 4049,
+  "decoded_frames": 4049,
+  "nonzero_samples": 7937197,
+  "sample_count": 373,
+  "sample_window_seconds": 93.824,
+  "clock_ticks_per_sec": 100,
+  "owned_browser_count": 0,
+  "owned_process_names": [
+    "rustune",
+    "rustune",
+    "rustune-audio"
+  ],
+  "usage": {
+    "daemon": {
+      "peak_rss_kib": 9672,
+      "peak_pss_kib": 4864,
+      "cpu_percent_one_core": 0.11
+    },
+    "tui": {
+      "peak_rss_kib": 8228,
+      "peak_pss_kib": 3716,
+      "cpu_percent_one_core": 0.11
+    },
+    "helper": {
+      "peak_rss_kib": 141128,
+      "peak_pss_kib": 118699,
+      "cpu_percent_one_core": 1.59
+    }
+  },
+  "total": {
+    "peak_rss_kib": 159028,
+    "peak_pss_kib": 127279,
+    "cpu_percent_one_core": 1.8
+  }
+}

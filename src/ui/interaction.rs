@@ -232,10 +232,8 @@ impl App {
         vec![
             format!(
                 "Music User Token: {} · Enter to edit",
-                if status.is_some_and(|s| s.playback.authorized) {
-                    "Apple playback authorized"
-                } else if self.token_stored {
-                    "saved locally, unverified"
+                if self.token_stored {
+                    "saved locally"
                 } else {
                     "not saved"
                 }

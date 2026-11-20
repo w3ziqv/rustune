@@ -1,11 +1,12 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
+pub const PROTOCOL_VERSION: u32 = 2;
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "command", content = "args", rename_all = "snake_case")]
 pub enum Control {
-    Start {
-        id: String,
-        volume: f64,
+    Hello {
+        version: u32,
     },
     Prepare {
         id: String,
@@ -14,7 +15,10 @@ pub enum Control {
     },
     Pause(bool),
     Volume(f64),
-    Seek(f64),
+    Seek {
+        request_id: u64,
+        position: f64,
+    },
     Stop,
     Equalizer(crate::equalizer::EqSettings),
 }
@@ -22,7 +26,7 @@ impl Control {
     pub fn validate(&self) -> Result<()> {
         match self {
             Self::Equalizer(settings) => settings.validate()?,
-            Self::Start { id, volume } | Self::Prepare { id, volume, .. } => {
+            Self::Prepare { id, volume, .. } => {
                 ensure!(
                     !id.is_empty() && id.len() <= 32 && id.bytes().all(|b| b.is_ascii_digit()),
                     "Native playback supports catalog songs only"
@@ -36,7 +40,7 @@ impl Control {
                 volume.is_finite() && (0.0..=1.0).contains(volume),
                 "Invalid audio volume"
             ),
-            Self::Seek(position) => ensure!(
+            Self::Seek { position, .. } => ensure!(
                 position.is_finite() && (0.0..=21600.0).contains(position),
                 "Invalid audio seek position"
             ),
@@ -48,6 +52,13 @@ impl Control {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", content = "data", rename_all = "snake_case")]
 pub enum Event {
+    Hello {
+        version: u32,
+    },
+    SeekApplied {
+        request_id: u64,
+        position: f64,
+    },
     EqualizerApplied {
         settings: crate::equalizer::EqSettings,
         headroom_db: f64,

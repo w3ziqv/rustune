@@ -72,6 +72,20 @@ async fn real_service_persists_queue_pushes_updates_and_obeys_mpris() {
         serde_json::Value::Null,
         "idle must not launch Chromium"
     );
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut socket = tokio::net::UnixStream::connect(paths.socket())
+            .await
+            .unwrap();
+        socket.write_u32(65537).await.unwrap();
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), socket.read(&mut [0]))
+                .await
+                .expect("reject from header alone")
+                .unwrap(),
+            0
+        );
+    }
     let mut stream = tokio::net::UnixStream::connect(paths.socket())
         .await
         .unwrap();

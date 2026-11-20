@@ -19,6 +19,8 @@ Queue pokazuje odrębne zaznaczenie, znacznik bieżącego wpisu, rzeczywistą ko
 
 `:clear` usuwa nadchodzące (i zbędną historię), zachowując bieżący wpis, pozycję, pauzę, shuffle i repeat. Po jego EOF usługa się zatrzymuje także przy repeat one/all; nowe dodanie ponownie umożliwia dalszy ciąg. `u` w Queue lub `:undo` przywraca jeden poprzedni snapshot sprzed ostatniego zastąpienia/wyczyszczenia. Audio zostaje zatrzymane; dawnej pozycji i dźwięku nie odtwarzamy. Snapshot ma maksymalnie jedną ograniczoną sesję i nie przetrwa restartu.
 
+MPRIS Previous przechodzi do poprzedniego wystąpienia w kolejce. MPRIS Next i Previous zachowują pauzę lub zatrzymanie. SetPosition używa ścieżki wystąpienia z `Metadata`. Po aktualizacji klient powinien ponownie odczytać tę ścieżkę.
+
 `:stop` zatrzymuje audio i zeruje pozycję; `:shutdown` zamyka usługę. `:cancel` / `c` anuluje przygotowywanie albumu przed zapisem. Gdy zaczyna się trwały zapis, anulowanie nie jest już dostępne. `:retry` / `R` ponawia ostatnią operację albumu lub jawne żądanie kolejki. Failed audio pozostaje widoczne (również podczas wpisywania wyszukiwania); Play ponawia bieżący utwór.
 
 ## Kolejność, historia i tryby
@@ -29,7 +31,7 @@ Play next X, potem Y daje X → Y → dalszy kontekst. Bloki albumów zachowują
 
 Shuffle jest zapisaną kolejnością, a nie losowaniem przy każdym EOF. Zmiana shuffle dotyczy przyszłego fragmentu, pozostawia bieżący utwór i blok next. Wyłączenie shuffle przywraca kolejność źródłową/chronologię dodawania przyszłych wpisów. Append zachowuje stabilną kolejność dopisanych pozycji. Ręczne przenoszenie zmienia plan słyszalnego dalszego ciągu.
 
-Previous przy pozycji **>3 s** przewija bieżący utwór do początku. Przy pozycji **≤3 s** i shuffle off wybiera poprzedni wpis kolejki, a przy shuffle on poprzedni rzeczywiście słyszany wpis. Następne Next wraca przez historię do przodu i zachowuje już ustalony dalszy ciąg. Next/Previous zachowują pauzę. Repeat One dotyczy EOF; ręczne Next przechodzi dalej. Repeat All powtarza zatwierdzoną listę, wraz ze świadomie dodanymi wpisami. Pusta kolejka nie ma kandydata do odtwarzania. Błąd audio zatrzymuje się jako Failed; nie pomijamy go po cichu.
+Previous w TUI i CLI przy pozycji **>3 s** przewija bieżący utwór do początku. Przy pozycji **≤3 s** i shuffle off wybiera poprzedni wpis kolejki, a przy shuffle on poprzedni rzeczywiście słyszany wpis. Następne Next wraca przez historię do przodu i zachowuje już ustalony dalszy ciąg. Next/Previous zachowują pauzę. Repeat One dotyczy EOF; ręczne Next przechodzi dalej. Repeat All powtarza zatwierdzoną listę, wraz ze świadomie dodanymi wpisami. Pusta kolejka nie ma kandydata do odtwarzania. Błąd audio zatrzymuje się jako Failed; nie pomijamy go po cichu.
 
 ## Pobieranie i transakcja
 

@@ -67,8 +67,15 @@ Token privately. Backspace edits, Ctrl-U clears, Esc cancels, Enter saves.
 `:logout` / `rustune logout` removes only the local token. Local storage does not
 verify Apple account acceptance. No browser login or native messaging remains.
 
-Native playback requires the sibling rustune-audio helper, private token and
-compatible CDM. Source quality is unknown until the decoder reports it. Accepted
+Native playback requires the sibling `rustune-audio` helper, private token and
+compatible CDM. Run `rustune doctor` for local checks and repair steps, or
+`rustune doctor --json` for the same report as JSON. Settings → Audio information
+shows the checks in the TUI. Use ↑/↓ to scroll and R to refresh. The checks
+inspect token and CDM file presence, negotiate with the helper beside the
+frontend and probe the local service and session D-Bus. A running service reports
+the helper protocol it expects. If that version differs or is unreported,
+restart the service with a matching pair of binaries. The checks run without
+Apple requests or a playback attempt. Source quality is unknown until the decoder reports it. Accepted
 account tokens enable Library, Search → My library and Playlists. Explicit account
 writes, confirmations and journal limits are described in [playlists](playlists.md).
 Queue edits do not auto-play music. The service publishes changes through private

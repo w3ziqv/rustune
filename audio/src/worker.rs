@@ -9,6 +9,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+fn seek_at_end(target: f64, duration: f64) -> Result<bool> {
+    let target_us = (target * 1_000_000.0).round() as i64;
+    let duration_us = (duration * 1_000_000.0).round() as i64;
+    ensure!(
+        target_us <= duration_us,
+        "Seek position is beyond the end of the track"
+    );
+    Ok(target_us == duration_us)
+}
+
 fn verify_end(position: f64, duration: f64, encrypted: u64, decoded: u64) -> Result<()> {
     ensure!(
         encrypted > 0 && decoded > 0,
@@ -55,8 +65,16 @@ pub async fn run(paths: &Paths) -> Result<()> {
 async fn run_inner(paths: &Paths) -> Result<()> {
     let first = read_control(&mut std::io::stdin())
         .map_err(|_| anyhow!("Invalid initial audio worker command"))?;
-    let (id, volume, paused) = match first {
-        Control::Start { id, volume } => (id, volume, false),
+    let Control::Hello { version } = first else {
+        anyhow::bail!("Replace both rustune and rustune-audio with a matching pair");
+    };
+    let supported = rustune_core::protocol::PROTOCOL_VERSION;
+    emit(&Event::Hello { version: supported })?;
+    if version != supported {
+        return Ok(());
+    }
+    let (id, volume, paused) = match read_control(&mut std::io::stdin())? {
+        Control::Stop => return Ok(()),
         Control::Prepare { id, volume, paused } => (id, volume, paused),
         _ => return Err(anyhow!("Audio worker requires a start command")),
     };
@@ -143,26 +161,12 @@ async fn run_inner(paths: &Paths) -> Result<()> {
         sample_rate: rate,
         channels,
     })?;
-    let mut state = AudioState {
-        equalizer: super::equalizer::Equalizer::new(
-            output_rate,
-            rustune_core::equalizer::EqSettings::default(),
-        )?,
-        pcm_buffer: Vec::with_capacity(4096),
-        volume,
-        paused,
-        stop: false,
-        seek: None,
-        base: 0.0,
-        written: 0,
-        encrypted: 0,
-        decoded: 0,
-        nonzero: 0,
-        last_event: Instant::now() - Duration::from_secs(1),
-    };
+    let mut state = AudioState::new(output_rate, volume, paused)?;
+    let mut landing = None;
     let mut frame = ffmpeg::frame::Audio::empty();
     'playback: loop {
         let mut eof = false;
+        let mut requested_end = false;
         loop {
             cdm.poll().map_err(|_| {
                 anyhow!("Native CDM needs renewed authorization; restart this track")
@@ -172,24 +176,32 @@ async fn run_inner(paths: &Paths) -> Result<()> {
                 let _ = pcm.drop();
                 return Ok(());
             }
-            if let Some(target) = state.seek.take() {
-                ensure!(
-                    target < manifest.duration,
-                    "Seek position is beyond the end of the track"
-                );
-                input
-                    .seek((target * 1_000_000.0) as i64, ..)
-                    .map_err(|_| anyhow!("This native stream does not support seeking"))?;
+            if let Some((request_id, target)) = state.seek.take() {
+                requested_end = seek_at_end(target, manifest.duration)?;
+                if !requested_end {
+                    input
+                        .seek((target * 1_000_000.0) as i64, ..)
+                        .map_err(|_| anyhow!("This native stream does not support seeking"))?;
+                }
                 decoder.flush();
                 resampler.reset()?;
                 state.equalizer.reset();
                 let _ = pcm.drop();
                 pcm.prepare()
                     .map_err(|_| anyhow!("Cannot reset audio output after seeking"))?;
-                state.base = target;
                 state.written = 0;
+                if requested_end {
+                    landing = None;
+                    state.base = manifest.duration;
+                    emit(&Event::SeekApplied {
+                        request_id,
+                        position: state.base,
+                    })?;
+                    break;
+                }
+                landing = Some((request_id, target));
             }
-            if state.paused {
+            if state.paused && landing.is_none() {
                 state.report(&pcm, output_rate)?;
                 std::thread::sleep(Duration::from_millis(10));
                 continue;
@@ -248,23 +260,46 @@ async fn run_inner(paths: &Paths) -> Result<()> {
                     Err(_) => return Err(anyhow!("Native AAC decoding failed")),
                 }
                 state.decoded += 1;
-                if let Some(timestamp) = frame.timestamp() {
-                    let position = timestamp as f64 * time_base;
-                    if position + frame.samples() as f64 / f64::from(rate) < state.base {
-                        continue;
+                let timestamp = frame.timestamp().map(|pts| pts as f64 * time_base);
+                let frame_duration = frame.samples() as f64 / f64::from(rate);
+                let applied = match landing {
+                    Some((id, target)) => {
+                        match landing_position(target, timestamp, frame_duration)? {
+                            Some(position) => Some((id, position)),
+                            None => continue,
+                        }
                     }
-                    if state.written == 0 {
-                        state.base = position.max(0.0);
-                    }
-                }
+                    None => None,
+                };
                 let samples = resampler.convert(&frame)?;
+                if samples.is_empty() {
+                    continue;
+                }
+                if let Some((request_id, position)) = applied {
+                    landing = None;
+                    state.base = position;
+                    emit(&Event::SeekApplied {
+                        request_id,
+                        position,
+                    })?;
+                } else if state.written == 0
+                    && let Some(position) = timestamp
+                {
+                    state.base = position.max(0.0);
+                }
                 state.output(&pcm, output_rate, &rx, &cdm, samples)?;
                 if state.stop || state.seek.is_some() {
                     break;
                 }
             }
-            state.report(&pcm, output_rate)?;
+            if landing.is_none() {
+                state.report(&pcm, output_rate)?;
+            }
             if eof {
+                ensure!(
+                    landing.is_none(),
+                    "Stream ended before the requested seek position"
+                );
                 break;
             }
         }
@@ -329,12 +364,12 @@ async fn run_inner(paths: &Paths) -> Result<()> {
                 (latency.max(0) as f64 / f64::from(output_rate) + 0.02).min(0.25),
             ));
         }
-        ensure!(
-            state.encrypted > 0 && state.decoded > 0,
-            "No encrypted audio was decoded"
-        );
         let position = state.base + state.written as f64 / f64::from(output_rate);
-        verify_end(position, manifest.duration, state.encrypted, state.decoded)?;
+        // An explicit cursor move to the endpoint submits no PCM. Natural EOF
+        // still requires the decoder counters and output-clock verification.
+        if !requested_end {
+            verify_end(position, manifest.duration, state.encrypted, state.decoded)?;
+        }
         let _ = pcm.drop();
         emit(&Event::Ended {
             position,
@@ -345,13 +380,25 @@ async fn run_inner(paths: &Paths) -> Result<()> {
         return Ok(());
     }
 }
+/// Decode through demux preroll even while paused. The clock starts at the
+/// timestamp of the first retained frame; earlier discarded requests get no ack.
+fn landing_position(
+    target: f64,
+    timestamp: Option<f64>,
+    frame_duration: f64,
+) -> Result<Option<f64>> {
+    let start = timestamp
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| anyhow!("Missing timestamp after seeking"))?;
+    Ok((start + frame_duration > target).then_some(start.max(0.0)))
+}
 struct AudioState {
     equalizer: super::equalizer::Equalizer,
     pcm_buffer: Vec<i16>,
     volume: f64,
     paused: bool,
     stop: bool,
-    seek: Option<f64>,
+    seek: Option<(u64, f64)>,
     base: f64,
     written: u64,
     encrypted: u64,
@@ -360,6 +407,25 @@ struct AudioState {
     last_event: Instant,
 }
 impl AudioState {
+    fn new(output_rate: u32, volume: f64, paused: bool) -> Result<Self> {
+        Ok(Self {
+            equalizer: super::equalizer::Equalizer::new(
+                output_rate,
+                rustune_core::equalizer::EqSettings::default(),
+            )?,
+            pcm_buffer: Vec::with_capacity(4096),
+            volume,
+            paused,
+            stop: false,
+            seek: None,
+            base: 0.0,
+            written: 0,
+            encrypted: 0,
+            decoded: 0,
+            nonzero: 0,
+            last_event: Instant::now() - Duration::from_secs(1),
+        })
+    }
     fn commands(&mut self, rx: &mpsc::Receiver<Control>) -> Result<()> {
         while let Ok(command) = rx.try_recv() {
             match command {
@@ -375,9 +441,12 @@ impl AudioState {
                     self.last_event = Instant::now() - Duration::from_secs(1);
                 }
                 Control::Volume(volume) => self.volume = volume,
-                Control::Seek(position) => self.seek = Some(position),
+                Control::Seek {
+                    request_id,
+                    position,
+                } => self.seek = Some((request_id, position)),
                 Control::Stop => self.stop = true,
-                Control::Start { .. } | Control::Prepare { .. } => self.stop = true,
+                Control::Hello { .. } | Control::Prepare { .. } => self.stop = true,
             }
         }
         Ok(())
@@ -466,6 +535,33 @@ impl AudioState {
 mod tests {
     use super::*;
     #[test]
+    fn whole_microsecond_track_length_selects_eof_without_demuxing_past_it() {
+        let duration = 93.99454999999998;
+        assert!(seek_at_end(93.99455, duration).unwrap());
+        assert!(!seek_at_end(93.994549, duration).unwrap());
+        assert!(seek_at_end(93.994551, duration).is_err());
+    }
+    #[test]
+    fn burst_keeps_only_the_applied_request_id_and_target() {
+        let (tx, rx) = mpsc::sync_channel(4);
+        for (request_id, position) in [(41, 6.0), (42, 10.0)] {
+            tx.send(Control::Seek {
+                request_id,
+                position,
+            })
+            .unwrap();
+        }
+        let mut state = AudioState::new(44100, 0.5, true).unwrap();
+        state.commands(&rx).unwrap();
+        assert_eq!(state.seek.take(), Some((42, 10.0)));
+    }
+    #[test]
+    fn seek_lands_on_the_first_retained_frame_timestamp() {
+        assert_eq!(landing_position(5.0, Some(4.9), 0.02).unwrap(), None);
+        assert_eq!(landing_position(5.0, Some(4.99), 0.02).unwrap(), Some(4.99));
+        assert!(landing_position(5.0, None, 0.02).is_err());
+    }
+    #[test]
     fn truncated_stream_cannot_be_reported_as_a_complete_song() {
         assert!(verify_end(30.0, 359.7, 1200, 1200).is_err());
         assert!(verify_end(359.68, 359.73, 15400, 15400).is_ok());
@@ -475,7 +571,8 @@ mod tests {
     #[test]
     fn worker_refuses_non_catalog_ids_and_nonfinite_controls() {
         assert!(
-            Control::Start {
+            Control::Prepare {
+                paused: false,
                 id: "1440838314".into(),
                 volume: 0.7
             }
@@ -483,16 +580,30 @@ mod tests {
             .is_ok()
         );
         assert!(Control::Pause(true).validate().is_ok());
-        assert!(Control::Seek(12.0).validate().is_ok());
+        assert!(
+            Control::Seek {
+                request_id: 1,
+                position: 12.0
+            }
+            .validate()
+            .is_ok()
+        );
         for control in [
-            Control::Start {
+            Control::Prepare {
+                paused: false,
                 id: "../private".into(),
                 volume: 0.7,
             },
             Control::Volume(f64::NAN),
             Control::Volume(1.1),
-            Control::Seek(f64::INFINITY),
-            Control::Seek(-1.0),
+            Control::Seek {
+                request_id: 1,
+                position: f64::INFINITY,
+            },
+            Control::Seek {
+                request_id: 1,
+                position: -1.0,
+            },
         ] {
             assert!(control.validate().is_err());
         }

@@ -47,6 +47,19 @@ pub enum Request {
     Next,
     Previous,
     Seek(f64),
+    SeekBy(i64),
+    RelativeSeek(i64),
+    MprisToggle,
+    SetPosition {
+        entry_id: u64,
+        position_us: i64,
+    },
+    MprisNext,
+    MprisPrevious,
+    MprisPlay,
+    MprisPause,
+    SetShuffle(bool),
+    SetRepeat(crate::model::Repeat),
     Volume(f64),
     Mute,
     Shuffle,
@@ -89,8 +102,14 @@ pub enum Request {
     Stop,
 }
 pub async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R) -> Result<Vec<u8>> {
+    read_limited_frame(reader, MAX_FRAME).await
+}
+pub(crate) async fn read_limited_frame<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    limit: usize,
+) -> Result<Vec<u8>> {
     let n = reader.read_u32().await? as usize;
-    anyhow::ensure!(n > 0 && n <= MAX_FRAME, "IPC frame exceeds size limit");
+    anyhow::ensure!(n > 0 && n <= limit, "IPC frame exceeds size limit");
     let mut b = vec![0; n];
     reader.read_exact(&mut b).await?;
     Ok(b)

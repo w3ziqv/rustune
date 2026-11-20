@@ -2,6 +2,20 @@
 use super::*;
 use crate::model::PlaybackPhase;
 impl Engine {
+    pub(super) async fn seek(&mut self, position: f64) -> Result<()> {
+        let request_id = self
+            .last_seek_sent
+            .checked_add(1)
+            .context("Seek request ID exhausted")?;
+        self.audio_control(Control::Seek {
+            request_id,
+            position,
+        })
+        .await?;
+        self.last_seek_sent = request_id;
+        self.pending_position = Some(position);
+        Ok(())
+    }
     pub(super) async fn stop_audio(&mut self) {
         self.audio_generation = self.audio_generation.wrapping_add(1);
         if let Some(audio) = self.audio.take() {
@@ -13,6 +27,8 @@ impl Engine {
             phase: PlaybackPhase::Stopped,
             ..Playback::default()
         };
+        self.pending_position = None;
+        self.last_seek_applied = self.last_seek_sent;
         self.desired_paused = false;
         self.audio_error = None;
     }
@@ -34,7 +50,7 @@ impl Engine {
     pub(super) async fn start_audio_paused(&mut self, index: usize, paused: bool) -> Result<()> {
         ensure!(
             self.factory.available(&self.paths),
-            crate::backend::NATIVE_UNAVAILABLE
+            self.factory.unavailable_reason()
         );
         let track = self
             .queue
@@ -56,7 +72,11 @@ impl Engine {
         self.playback = Playback {
             volume: self.playback.volume,
             track: Some(track.clone()),
-            phase: PlaybackPhase::Preparing,
+            phase: if paused {
+                PlaybackPhase::Paused
+            } else {
+                PlaybackPhase::Preparing
+            },
             state: 1,
             ..Playback::default()
         };
@@ -82,7 +102,7 @@ impl Engine {
         if self.audio.is_none() {
             ensure!(
                 self.factory.available(&self.paths),
-                crate::backend::NATIVE_UNAVAILABLE
+                self.factory.unavailable_reason()
             );
         }
         self.audio
@@ -117,11 +137,30 @@ impl Engine {
             self.message = "End of queue".into();
         }
     }
-    pub(super) async fn native_event(&mut self, generation: u64, event: Event) {
+    pub(super) async fn native_event(&mut self, generation: u64, event: Event) -> Option<i64> {
         if generation != self.audio_generation {
-            return;
+            return None;
         }
         match event {
+            Event::Hello { .. } => {}
+            Event::SeekApplied {
+                request_id,
+                position,
+            } => {
+                if self.audio.is_some()
+                    && request_id > self.last_seek_applied
+                    && request_id <= self.last_seek_sent
+                    && position.is_finite()
+                    && (0.0..=self.playback.duration).contains(&position)
+                {
+                    self.last_seek_applied = request_id;
+                    if request_id == self.last_seek_sent {
+                        self.pending_position = None;
+                    }
+                    self.playback.position = position;
+                    return Some(crate::model::micros(position));
+                }
+            }
             Event::EqualizerApplied {
                 settings,
                 headroom_db,
@@ -149,7 +188,7 @@ impl Engine {
                 self.playback.source_codec = Some("AAC".into());
                 self.playback.source_sample_rate_hz = Some(sample_rate);
                 self.playback.source_channels = Some(channels);
-                self.playback.target_bitrate_kbps = Some(256);
+
                 self.message = "Native CDM license accepted; waiting for audio state".into();
             }
             Event::State {
@@ -206,5 +245,6 @@ impl Engine {
             }
             Event::Error(message) => self.fail_audio(message).await,
         }
+        None
     }
 }

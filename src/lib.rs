@@ -4,6 +4,7 @@ pub mod auth;
 pub mod backend;
 pub mod cache;
 pub mod config;
+pub mod diagnostics;
 pub mod input;
 pub mod ipc;
 pub mod keys;

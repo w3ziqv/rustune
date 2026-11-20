@@ -70,7 +70,7 @@ with tempfile.TemporaryDirectory(prefix='rustune-functional-') as directory:
         check(rpc('mute')['ok'] and abs(status()['playback']['volume']-.2)<.001,'unmute restores configured local volume')
         result=rpc('browse',{'kind':'library','term':'','next':None});check(not result['ok'] and 'accepted Music User Token' in result['error'],'invalid artificial token cannot read private library')
         check(status()['current']==0 and status()['queue_len']==3,'failed playback controls preserve queue')
-        prop=subprocess.check_output(['busctl',f'--address={env["DBUS_SESSION_BUS_ADDRESS"]}','get-property','org.mpris.MediaPlayer2.rustune','/org/mpris/MediaPlayer2','org.mpris.MediaPlayer2.Player','CanControl'],env=env)
+        prop=subprocess.check_output(['busctl',f'--address={env["DBUS_SESSION_BUS_ADDRESS"]}','get-property','org.mpris.MediaPlayer2.rustune','/org/mpris/MediaPlayer2','org.mpris.MediaPlayer2.Player','CanPlay'],env=env)
         check(prop.strip()==b'b false','MPRIS reports unavailable playback honestly')
         master,slave=pty.openpty();fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',39,142,0,0))
         tui=subprocess.Popen([binary],stdin=slave,stdout=slave,stderr=slave,env=env,start_new_session=True);os.close(slave)

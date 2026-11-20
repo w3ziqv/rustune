@@ -1,4 +1,5 @@
 mod audio;
+mod connections;
 mod operations;
 mod persistence;
 mod playlist_journal;
@@ -15,7 +16,7 @@ use crate::backend::worker::{Control, Event};
 use crate::{
     catalog::Catalog,
     config::{Config, Paths, PerformanceMode, private_write},
-    ipc::{Request, read_frame, write_frame},
+    ipc::Request,
     model::{Playback, Repeat, Track},
     queue::Queue,
 };
@@ -30,7 +31,7 @@ use std::{
 };
 use tokio::{
     net::UnixListener,
-    sync::{Semaphore, mpsc, oneshot, watch},
+    sync::{mpsc, oneshot, watch},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -43,6 +44,8 @@ pub struct Appearance {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Status {
+    #[serde(default)]
+    pub helper_protocol: Option<u32>,
     #[serde(default)]
     pub client_pids: Vec<u32>,
     #[serde(default)]
@@ -103,6 +106,32 @@ pub struct Status {
     pub cache_entries: usize,
     pub message: String,
     pub sleep_remaining: Option<u64>,
+}
+impl Status {
+    pub fn can_play(&self) -> bool {
+        self.audio_pid.is_some() || (self.start_available && self.queue_len > 0)
+    }
+    pub fn can_pause(&self) -> bool {
+        self.audio_pid.is_some() && self.playback.track.is_some()
+    }
+    pub fn can_seek(&self) -> bool {
+        self.can_pause() && self.playback.duration > 0.0
+    }
+    pub fn can_go_next(&self) -> bool {
+        self.start_available && self.can_next
+    }
+    pub fn can_go_previous(&self) -> bool {
+        self.start_available && self.can_previous
+    }
+    pub fn playback_status(&self) -> &'static str {
+        if self.playback.playing {
+            "Playing"
+        } else if self.playback.phase == crate::model::PlaybackPhase::Paused {
+            "Paused"
+        } else {
+            "Stopped"
+        }
+    }
 }
 #[derive(Serialize, Deserialize)]
 pub struct Reply {
@@ -200,6 +229,9 @@ struct Engine {
     audio: Option<Box<dyn AudioDriver>>,
     factory: Arc<dyn DriverFactory>,
     desired_paused: bool,
+    last_seek_sent: u64,
+    last_seek_applied: u64,
+    pending_position: Option<f64>,
     audio_error: Option<String>,
     transport_epoch: u64,
     staged_transport_epoch: u64,
@@ -243,6 +275,7 @@ impl Engine {
         let catalog = Arc::new(Catalog::new(&paths)?);
         catalog.set_capacity(config.performance.limits().cache_entries);
         let playback = Playback {
+            track: saved.queue.current_track().cloned(),
             volume: config.volume,
             ..Playback::default()
         };
@@ -281,8 +314,11 @@ impl Engine {
             message,
             shutdown: false,
             audio: None,
-            factory: Arc::new(NativeFactory),
+            factory: Arc::new(NativeFactory::default()),
             desired_paused: false,
+            last_seek_sent: 0,
+            last_seek_applied: 0,
+            pending_position: None,
             audio_error: None,
             transport_epoch: 0,
             staged_transport_epoch: 0,
@@ -317,6 +353,7 @@ impl Engine {
     }
     fn status(&self) -> Status {
         Status {
+            helper_protocol: Some(rustune_core::protocol::PROTOCOL_VERSION),
             client_pids: self
                 .clients
                 .lock()
@@ -344,7 +381,7 @@ impl Engine {
                 .candidate(true)
                 .map(|i| self.queue.tracks[i].entry_id),
             can_next: self.queue.candidate(true).is_some(),
-            can_previous: self.queue.previous_candidate().is_some() || self.playback.position > 3.0,
+            can_previous: self.queue.previous_candidate().is_some(),
             operation: self.operation.clone(),
             audio_error: self.audio_error.clone(),
             config_error: self.config_results.borrow().clone(),
@@ -372,6 +409,70 @@ impl Engine {
     }
     async fn handle(&mut self, request: Request) -> Result<Value> {
         use crate::ipc::QueueAction;
+        // Interpret remote transport intents only when dequeued by the service.
+        let request = match request {
+            Request::SetPosition {
+                entry_id,
+                position_us,
+            } => {
+                let status = self.status();
+                let length = crate::model::micros(status.playback.duration);
+                if !status.can_seek()
+                    || status.current_entry_id != Some(entry_id)
+                    || position_us < 0
+                    || position_us > length
+                {
+                    return Ok(serde_json::to_value(status)?);
+                }
+                Request::Seek(if position_us == length {
+                    status.playback.duration
+                } else {
+                    position_us as f64 / 1_000_000.0
+                })
+            }
+            Request::SeekBy(offset) => {
+                let target = self.pending_position.unwrap_or(self.playback.position)
+                    + offset as f64 / 1_000_000.0;
+                Request::Seek(target.max(0.0).min(self.playback.duration))
+            }
+            Request::MprisToggle => {
+                let status = self.status();
+                ensure!(
+                    status.can_pause() || status.can_play(),
+                    "No playable track is available"
+                );
+                Request::Toggle
+            }
+            Request::RelativeSeek(offset) => {
+                let status = self.status();
+                if !status.can_seek() {
+                    return Ok(serde_json::to_value(status)?);
+                }
+                let current =
+                    crate::model::micros(self.pending_position.unwrap_or(status.playback.position));
+                let target = current.saturating_add(offset).max(0);
+                let length = crate::model::micros(status.playback.duration);
+                if target > length {
+                    Request::MprisNext
+                } else if target == length {
+                    Request::Seek(status.playback.duration)
+                } else {
+                    Request::Seek(target as f64 / 1_000_000.0)
+                }
+            }
+            Request::SetRepeat(v) if v == self.queue.repeat && self.pending.is_none() => {
+                return Ok(serde_json::to_value(self.status())?);
+            }
+            Request::SetShuffle(v) if v == self.queue.shuffle && self.pending.is_none() => {
+                return Ok(serde_json::to_value(self.status())?);
+            }
+            Request::MprisPlay if self.status().can_play() => Request::Play,
+            Request::MprisPause if self.status().can_pause() => Request::Pause,
+            Request::MprisPlay | Request::MprisPause => {
+                return Ok(serde_json::to_value(self.status())?);
+            }
+            other => other,
+        };
         let fingerprint = serde_json::to_string(&request)?;
         let mut save = false;
         match &request {
@@ -473,9 +574,9 @@ impl Engine {
             }
             Request::Play | Request::Toggle if self.audio.is_none() || self.playback.ended => {
                 if !self.factory.available(&self.paths) {
-                    self.fail_audio(crate::backend::NATIVE_UNAVAILABLE.into())
+                    self.fail_audio(self.factory.unavailable_reason().into())
                         .await;
-                    anyhow::bail!(crate::backend::NATIVE_UNAVAILABLE);
+                    anyhow::bail!(self.factory.unavailable_reason());
                 }
                 let index = self
                     .queue
@@ -509,45 +610,55 @@ impl Engine {
                 self.desired_paused = paused;
                 self.transport_epoch += 1;
             }
-            Request::Next | Request::Previous => {
-                ensure!(
-                    self.factory.available(&self.paths),
-                    crate::backend::NATIVE_UNAVAILABLE
-                );
-                ensure!(
-                    self.pending.is_none(),
-                    "Queue write in progress; retry navigation"
-                );
-                if matches!(request, Request::Previous) && self.playback.position > 3.0 {
-                    self.audio_control(Control::Seek(0.0)).await?;
+            Request::Next | Request::Previous | Request::MprisNext | Request::MprisPrevious => {
+                let remote = matches!(request, Request::MprisNext | Request::MprisPrevious);
+                let previous = matches!(request, Request::Previous | Request::MprisPrevious);
+                if remote {
+                    let status = self.status();
+                    if (previous && !status.can_go_previous())
+                        || (!previous && !status.can_go_next())
+                    {
+                        return Ok(serde_json::to_value(status)?);
+                    }
+                }
+                if !remote && previous && self.playback.position > 3.0 && self.audio.is_some() {
+                    self.seek(0.0).await?;
                 } else {
+                    ensure!(
+                        self.factory.available(&self.paths),
+                        self.factory.unavailable_reason()
+                    );
+                    ensure!(
+                        self.pending.is_none(),
+                        "Queue write in progress; retry navigation"
+                    );
                     let mut q = self.queue.clone();
-                    let next = if matches!(request, Request::Next) {
-                        q.advance(true)
-                    } else {
+                    let index = if previous {
                         q.previous()
-                    };
-                    if let Some(index) = next {
-                        let id = q.tracks[index].entry_id;
-                        self.stage_navigation(
-                            q,
-                            operations::After::Start {
-                                entry_id: id,
-                                paused: self.desired_paused,
-                            },
-                            crate::ipc::operation_key(),
-                        )?;
-                    } else if matches!(request, Request::Next) {
-                        self.stop_audio().await;
                     } else {
+                        q.advance(true)
+                    };
+                    if let Some(index) = index {
+                        let after = if remote && self.audio.is_none() {
+                            operations::After::Stop
+                        } else {
+                            operations::After::Start {
+                                entry_id: q.tracks[index].entry_id,
+                                paused: self.desired_paused,
+                            }
+                        };
+                        self.stage_navigation(q, after, crate::ipc::operation_key())?;
+                    } else if previous {
                         anyhow::bail!("No previous track in listening history");
+                    } else {
+                        self.stop_audio().await;
                     }
                 }
             }
             Request::PlayIndex(_) => {
                 ensure!(
                     self.factory.available(&self.paths),
-                    crate::backend::NATIVE_UNAVAILABLE
+                    self.factory.unavailable_reason()
                 );
                 anyhow::bail!(
                     "Positional playback is obsolete; use PlayEntry with entry ID and revision"
@@ -557,14 +668,17 @@ impl Engine {
                 if self.audio.is_none() {
                     ensure!(
                         self.factory.available(&self.paths),
-                        crate::backend::NATIVE_UNAVAILABLE
+                        self.factory.unavailable_reason()
                     );
                 }
                 ensure!(
-                    position.is_finite() && position >= 0.0 && position < self.playback.duration,
+                    position.is_finite()
+                        && position >= 0.0
+                        && position <= self.playback.duration
+                        && self.playback.duration > 0.0,
                     "Seek position must be within the active track"
                 );
-                self.audio_control(Control::Seek(position)).await?;
+                self.seek(position).await?;
             }
             Request::Volume(volume) => {
                 ensure!(
@@ -593,27 +707,33 @@ impl Engine {
             Request::Sleep(seconds @ 1..) => {
                 ensure!(
                     self.factory.available(&self.paths),
-                    crate::backend::NATIVE_UNAVAILABLE
+                    self.factory.unavailable_reason()
                 );
                 ensure!(seconds <= 86400, "Sleep timer is limited to 24 hours");
                 self.sleep_until = Some(Instant::now() + Duration::from_secs(seconds));
             }
-            Request::Shuffle => {
+            Request::Shuffle | Request::SetShuffle(_) => {
+                let enabled = match request {
+                    Request::SetShuffle(value) => value,
+                    _ => !self.queue.shuffle,
+                };
                 self.queue_action(
                     crate::ipc::operation_key(),
                     self.queue.revision,
-                    QueueAction::SetShuffle {
-                        enabled: !self.queue.shuffle,
-                    },
+                    QueueAction::SetShuffle { enabled },
                     fingerprint,
                 )
                 .await?;
             }
-            Request::Repeat => {
-                let repeat = match self.queue.repeat {
-                    Repeat::Off => Repeat::All,
-                    Repeat::All => Repeat::One,
-                    Repeat::One => Repeat::Off,
+            Request::Repeat | Request::SetRepeat(_) => {
+                let repeat = if let Request::SetRepeat(value) = request {
+                    value
+                } else {
+                    match self.queue.repeat {
+                        Repeat::Off => Repeat::All,
+                        Repeat::All => Repeat::One,
+                        Repeat::One => Repeat::Off,
+                    }
                 };
                 self.queue_action(
                     crate::ipc::operation_key(),
@@ -756,6 +876,7 @@ impl Engine {
                 }
             }
             Request::StopAudio => {
+                self.cancel_deferred_play()?;
                 self.stop_audio().await;
                 self.transport_epoch += 1;
                 self.deferred_ended = false;
@@ -763,6 +884,12 @@ impl Engine {
                     pending.after = operations::After::Stop;
                 }
             }
+            Request::SeekBy(_)
+            | Request::MprisToggle
+            | Request::RelativeSeek(_)
+            | Request::SetPosition { .. }
+            | Request::MprisPlay
+            | Request::MprisPause => unreachable!("resolved at dispatch"),
             Request::Shutdown | Request::Stop => self.shutdown = true,
             Request::RecoverState => {
                 ensure!(
@@ -841,7 +968,14 @@ pub fn validate_track(t: &Track) -> Result<()> {
     Ok(())
 }
 pub async fn run(config: Config, paths: Paths) -> Result<()> {
-    run_with(config, paths, Arc::new(NativeFactory), None, None).await
+    run_with(
+        config,
+        paths,
+        Arc::new(NativeFactory::default()),
+        None,
+        None,
+    )
+    .await
 }
 pub(crate) async fn run_with(
     config: Config,
@@ -874,6 +1008,7 @@ pub(crate) async fn run_with(
     let (tx, mut rx) = mpsc::channel::<Envelope>(32);
     let mut engine = Engine::new(config.clone(), paths.clone())?;
     engine.factory = factory;
+    engine.factory.refresh().await;
     if let Some(catalog) = catalog {
         engine.catalog = catalog;
     }
@@ -884,58 +1019,16 @@ pub(crate) async fn run_with(
     if mpris.is_err() {
         tracing::warn!("MPRIS unavailable; session D-Bus is required");
     }
-    let permits = Arc::new(Semaphore::new(8));
-    let (quit_accept, mut accept_quit) = oneshot::channel::<()>();
-    let registry = engine.clients.clone();
-    let accept = tokio::spawn(async move {
-        let mut clients = tokio::task::JoinSet::new();
-        loop {
-            tokio::select! {
-                _=&mut accept_quit=>break,
-                accepted=listener.accept()=>{
-                    let Ok((mut s,_))=accepted else{break;};
-                    if s.peer_cred().is_err() || s.peer_cred().is_ok_and(|c|c.uid()!=uid){continue;}
-                    let Ok(permit)=permits.clone().try_acquire_owned() else {continue;};let sender=tx.clone();let mut updates=subscriber.clone();let metadata=catalog.clone();
-                    let registry = registry.clone();
-                    clients.spawn(async move {
-                        let _permit=permit;
-                        let operation=async {
-                            let b=tokio::time::timeout(Duration::from_secs(5),read_frame(&mut s)).await??;
-                            ensure!(b.len()<=65536,"command exceeds 64 KiB");
-                            let request:Request=serde_json::from_slice(&b)?;
-                            if matches!(request,Request::Subscribe) {
-                                let pid = s.peer_cred()?.pid().and_then(|p| u32::try_from(p).ok());
-                                let _registration = ClientRegistration::new(registry, pid);
-                                loop {
-                                    let status=updates.borrow_and_update().clone();
-                                    write_frame(&mut s,&Reply::result(Ok(serde_json::to_value(status)?))).await?;
-                                    let mut byte=[0u8;1];
-                                    tokio::select! {
-                                        r=updates.changed()=>{if r.is_err(){break;}}
-                                        _=tokio::io::AsyncReadExt::read(&mut s,&mut byte)=>break,
-                                    }
-                                }
-                                return Ok::<(),anyhow::Error>(());
-                            }
-                            let result=if let Request::Browse {kind,term,next}=request {
-                                let status=updates.borrow().clone();
-                                let page=metadata.browse(&kind,&term,next.as_deref(),&status.catalog_country,status.profile.limits()).await;
-                                if page.is_ok() && kind.starts_with("search:") && !term.trim().is_empty() {let _=send(&sender,Request::RecordSearch(term.trim().into())).await;}
-                                page.and_then(|p|serde_json::to_value(p).map_err(Into::into))
-                            } else {send(&sender,request).await};
-                            let r=Reply::result(result);write_frame(&mut s,&r).await
-                        };
-                        let _=operation.await;
-                    });
-                }
-                _=clients.join_next(),if !clients.is_empty()=>{}
-            }
-        }
-        let _ = tokio::time::timeout(Duration::from_secs(1), async {
-            while clients.join_next().await.is_some() {}
-        })
-        .await;
-    });
+    let (quit_accept, accept_quit) = oneshot::channel();
+    let accept = tokio::spawn(connections::serve(
+        listener,
+        uid,
+        tx,
+        subscriber,
+        catalog,
+        engine.clients.clone(),
+        accept_quit,
+    ));
 
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut timer = tokio::time::interval(Duration::from_secs(1));
@@ -945,8 +1038,16 @@ pub(crate) async fn run_with(
             Some(status)=engine.playlist_write_events.recv()=>{engine.playlist_write_status=Some(status);engine.playlist_write_task=None;state_tx.send_replace(engine.status());}
             Some(done)=engine.disk_events.recv()=>{engine.disk_complete(done).await;state_tx.send_replace(engine.status());}
             Some(event)=engine.album_events.recv()=>{engine.album_event(event).await;state_tx.send_replace(engine.status());}
-            Some((generation,event))=engine.events.recv()=>{engine.native_event(generation,event).await;state_tx.send_replace(engine.status());}
+            Some((generation,event))=engine.events.recv()=>{let seeked=engine.native_event(generation,event).await;
+                state_tx.send_replace(engine.status());
+                if let (Some(position),Ok((bus,_)))=(seeked,&mpris) {
+                    let _=crate::mpris::emit_seeked(bus,position).await;
+                }}
             _=timer.tick()=>{
+                engine.factory.refresh().await;
+                if engine.factory.available(&engine.paths)!=state_tx.borrow().start_available {
+                    state_tx.send_replace(engine.status());
+                }
                 if engine.sleep_until.is_some_and(|until|Instant::now()>=until){engine.sleep_until=None;let _=engine.audio_control(Control::Pause(true)).await;engine.desired_paused=true;engine.transport_epoch+=1;engine.message="Sleep timer paused playback".into();}
             }
             Some(e)=rx.recv()=>{

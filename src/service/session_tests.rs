@@ -143,7 +143,12 @@ async fn controlled_worker_preserves_pause_thresholds_reports_failure_and_reject
     e.playback.position = 4.0;
     e.handle(Request::Previous).await.unwrap();
     assert_eq!(e.queue.current_track().unwrap().id, "2");
-    assert!(driver.commands().iter().any(|v| v.contains("Seek(0.0)")));
+    assert!(
+        driver
+            .commands()
+            .iter()
+            .any(|v| v.contains("Seek {") && v.contains("position: 0.0"))
+    );
     e.playback.position = 3.0;
     e.handle(Request::Previous).await.unwrap();
     let done = e.disk_events.recv().await.unwrap();
@@ -695,4 +700,227 @@ async fn complete_album_exceeding_session_limit_preserves_old_queue_and_audio() 
     assert!(e.desired_paused);
     assert_eq!(driver.starts().len(), 1);
     assert_eq!(e.operation.as_ref().unwrap().phase, "failed");
+}
+
+#[tokio::test]
+async fn mpris_navigation_keeps_stopped_and_set_position_checks_occurrence_at_execution() {
+    use crate::backend::testing::Controlled;
+    let (_dir, mut e) = super::tests::engine();
+    let driver = std::sync::Arc::new(Controlled::default());
+    e.factory = driver.clone();
+    e.queue.clear();
+    for id in ["7", "7"] {
+        e.queue
+            .push(Track {
+                id: id.into(),
+                kind: "songs".into(),
+                ..Track::default()
+            })
+            .unwrap();
+    }
+    e.queue.current = Some(0);
+    let old_id = e.queue.current_entry_id().unwrap();
+    let stale = Request::SetPosition {
+        entry_id: old_id,
+        position_us: 1_000_000,
+    };
+    e.handle(Request::Play).await.unwrap();
+    let former_generation = e.audio_generation;
+    e.playback.duration = 60.0;
+    e.handle(Request::Seek(9.0)).await.unwrap();
+    let late = Event::SeekApplied {
+        request_id: 1,
+        position: 9.0,
+    };
+    e.handle(Request::StopAudio).await.unwrap();
+    e.handle(Request::MprisNext).await.unwrap();
+    let done = e.disk_events.recv().await.unwrap();
+    e.disk_complete(done).await;
+    assert_eq!(e.queue.current, Some(1));
+    assert!(e.audio.is_none());
+    e.handle(Request::Play).await.unwrap();
+    assert_eq!(e.playback.position, 0.0);
+    e.playback.duration = 60.0;
+    let commands = driver.commands();
+    e.handle(stale).await.unwrap();
+    assert_eq!(driver.commands(), commands);
+    assert_eq!(e.native_event(former_generation, late).await, None);
+    assert_eq!(e.playback.position, 0.0);
+    // Two keyboard presses before an ack accumulate in the service. The backend
+    // may coalesce them and report the actual frame nearest the second target.
+    e.handle(Request::SeekBy(10_000_000)).await.unwrap();
+    e.handle(Request::SeekBy(10_000_000)).await.unwrap();
+    assert_eq!(e.pending_position, Some(20.0));
+    let applied = Event::SeekApplied {
+        request_id: 3,
+        position: 19.998,
+    };
+    assert_eq!(
+        e.native_event(former_generation, applied.clone()).await,
+        None
+    );
+    assert_eq!(
+        e.native_event(e.audio_generation, applied.clone()).await,
+        Some(19_998_000)
+    );
+    assert_eq!(e.native_event(e.audio_generation, applied).await, None);
+    assert_eq!(e.playback.position, 19.998);
+    // The advertised length is rounded to a whole MPRIS microsecond.
+    e.playback.duration = 60.000_000_8;
+    let entry_id = e.queue.current_entry_id().unwrap();
+    e.handle(Request::SetPosition {
+        entry_id,
+        position_us: 60_000_001,
+    })
+    .await
+    .unwrap();
+    assert_eq!(e.pending_position, Some(e.playback.duration));
+}
+
+#[tokio::test]
+async fn busy_catalog_and_subscriptions_leave_ipc_capacity_for_control() {
+    use crate::{backend::testing::Controlled, ipc};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (_dir, e) = super::tests::engine();
+    let paths = e.paths.clone();
+    drop(e);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let catalog = Arc::new(Catalog::with_origin(&origin));
+    let service = tokio::spawn(run_with(
+        Config::default(),
+        paths.clone(),
+        Arc::new(Controlled::default()),
+        Some(catalog),
+        Some("unix:path=/nonexistent".into()),
+    ));
+    while !paths.socket().exists() {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    ipc::request(
+        &paths,
+        &Request::Enqueue {
+            track: Track {
+                id: "17".into(),
+                kind: "songs".into(),
+                ..Track::default()
+            },
+            next: false,
+            play: true,
+        },
+    )
+    .await
+    .unwrap();
+    let mut clients = Vec::new();
+    for i in 0..4 {
+        let mut socket = tokio::net::UnixStream::connect(paths.socket())
+            .await
+            .unwrap();
+        ipc::write_frame(
+            &mut socket,
+            &Request::Browse {
+                kind: "search:songs".into(),
+                term: format!("slow-{i}"),
+                next: None,
+            },
+        )
+        .await
+        .unwrap();
+        clients.push(socket);
+    }
+    // The catalogue serializes upstream lookups. The other three browse requests
+    // occupy browse slots while waiting for that same lookup lock.
+    let (upstream, _) = tokio::time::timeout(Duration::from_secs(2), listener.accept())
+        .await
+        .unwrap()
+        .unwrap();
+    let req = Request::Browse {
+        kind: "search:songs".into(),
+        term: "extra".into(),
+        next: None,
+    };
+    let excess = ipc::request(&paths, &req);
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), excess)
+            .await
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("busy")
+    );
+    for _ in 0..8 {
+        let mut socket = tokio::net::UnixStream::connect(paths.socket())
+            .await
+            .unwrap();
+        ipc::write_frame(&mut socket, &Request::Subscribe)
+            .await
+            .unwrap();
+        ipc::read_frame(&mut socket).await.unwrap();
+        clients.push(socket);
+    }
+    for cmd in [Request::Pause, Request::Status] {
+        tokio::time::timeout(Duration::from_millis(800), ipc::request(&paths, &cmd))
+            .await
+            .unwrap()
+            .expect("control slot under load");
+    }
+    let mut header = tokio::net::UnixStream::connect(paths.socket())
+        .await
+        .unwrap();
+    header.write_u32(65537).await.unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), header.read(&mut [0]))
+            .await
+            .unwrap()
+            .unwrap(),
+        0
+    );
+    let mut readers = Vec::new();
+    for _ in 0..16 {
+        let mut socket = tokio::net::UnixStream::connect(paths.socket())
+            .await
+            .unwrap();
+        socket.write_u16(0).await.unwrap();
+        readers.push(socket);
+    }
+    let pending = tokio::spawn({
+        let paths = paths.clone();
+        async move { ipc::request(&paths, &Request::Status).await }
+    });
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert!(
+        !pending.is_finished(),
+        "queued control must survive occupied reader slots"
+    );
+    drop(readers);
+    tokio::time::timeout(Duration::from_secs(1), pending)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    drop(clients);
+    drop(upstream);
+    ipc::request(&paths, &Request::Shutdown).await.unwrap();
+    service.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn stop_during_album_preparation_cancels_a_deferred_play() {
+    let (_dir, mut e) = super::tests::engine();
+    e.factory = Arc::new(crate::backend::testing::Controlled::default());
+    let (release, started, http) = delayed_album(&mut e).await;
+    let mut req = album_request(&e, "deferred-play");
+    if let Request::Album { action, .. } = &mut req {
+        *action = crate::ipc::AlbumAction::Play {
+            start_song: None,
+            shuffle: false,
+        };
+    }
+    e.handle(req).await.unwrap();
+    started.await.unwrap();
+    e.handle(Request::StopAudio).await.unwrap();
+    release.send(()).unwrap();
+    http.await.unwrap();
+    assert_eq!(e.operation.as_ref().unwrap().phase, "cancelled");
+    assert!(e.preparing.is_none() && e.audio.is_none());
 }

@@ -43,10 +43,13 @@ No browser or Music Assistant runtime is used.
 
 Token entry shows bounded dots and a character count. Enter saves privately;
 Esc cancels. Local token storage does not verify Apple account acceptance.
-`rustune doctor` checks local prerequisites; Play checks real authorization.
+Run `rustune doctor` or `rustune doctor --json` to check the local installation.
+Settings → Audio information displays the same checks. The protocol probe runs
+before CDM loading or network access. Install a matching pair of binaries if
+the helper is missing, incompatible or fails to answer within one second.
 Never add tokens, private caches or the CDM to source control.
 
-To update, close the old TUI, run `rustune ctl stop` if a service is running,
+To update, close the old TUI, run `rustune ctl shutdown` if a service is running,
 replace both executables, then reopen `rustune`. Queue/configuration/token files
 remain in their XDG directories. Already running processes use their old executable
 until stopped. Avoid replacing an executable during active playback.
