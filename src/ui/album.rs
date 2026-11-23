@@ -132,6 +132,7 @@ impl App {
                 playlist.clone(),
                 ipc::ContextAction::PlayFromPosition {
                     source_index: track.source_index.unwrap_or(self.selected),
+                    expected_song: Some(track.id),
                     shuffle: false,
                 },
             );

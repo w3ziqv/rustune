@@ -6,8 +6,10 @@ use std::{
     future::Future,
     hash::Hash,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
+
+use tokio::time::Instant;
 
 type Work<V> = BoxFuture<'static, std::result::Result<V, Arc<anyhow::Error>>>;
 
@@ -23,9 +25,13 @@ impl<K: Eq + Hash, V: Clone + Send + Sync + 'static> Reads<K, V> {
         key: K,
         work: impl Future<Output = Result<V>> + Send + 'static,
     ) -> Result<V> {
-        self.join(key, work)
-            .await
-            .map_err(|error| anyhow::anyhow!("{error}"))
+        self.join(key, work).await.map_err(|error| {
+            if let Some(limit) = error.downcast_ref::<LocalBudget>() {
+                anyhow::Error::new(*limit)
+            } else {
+                anyhow::anyhow!("{error}")
+            }
+        })
     }
 
     fn join(
@@ -44,6 +50,23 @@ impl<K: Eq + Hash, V: Clone + Send + Sync + 'static> Reads<K, V> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct LocalBudget {
+    pub retry_at: Instant,
+    provider: &'static str,
+}
+
+impl std::fmt::Display for LocalBudget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} request limit reached; retry in a minute",
+            self.provider
+        )
+    }
+}
+impl std::error::Error for LocalBudget {}
+
 #[derive(Default)]
 pub(super) struct Budget {
     calls: VecDeque<Instant>,
@@ -51,7 +74,7 @@ pub(super) struct Budget {
 }
 
 impl Budget {
-    pub fn reserve(&mut self, provider: &str) -> Result<()> {
+    pub fn reserve(&mut self, provider: &'static str) -> Result<()> {
         let now = Instant::now();
         if let Some(until) = self.blocked_until.filter(|until| *until > now) {
             anyhow::bail!(
@@ -66,10 +89,13 @@ impl Budget {
         {
             self.calls.pop_front();
         }
-        anyhow::ensure!(
-            self.calls.len() < 20,
-            "{provider} request limit reached; retry in a minute"
-        );
+        if self.calls.len() >= 20 {
+            return Err(LocalBudget {
+                retry_at: self.calls[0] + Duration::from_secs(60),
+                provider,
+            }
+            .into());
+        }
         self.calls.push_back(now);
         Ok(())
     }

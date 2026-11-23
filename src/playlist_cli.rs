@@ -111,6 +111,7 @@ impl PlaylistCommand {
                 key,
                 revision,
                 playlist,
+                account_generation: generation,
                 action,
             }
         };
@@ -153,6 +154,7 @@ impl PlaylistCommand {
                 match from_position {
                     Some(source_index) => ContextAction::PlayFromPosition {
                         source_index,
+                        expected_song: None,
                         shuffle,
                     },
                     None => ContextAction::Play {

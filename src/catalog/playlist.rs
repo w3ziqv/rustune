@@ -39,28 +39,107 @@ impl PlaylistRef {
         }
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PlaylistRead {
+    pub(crate) generation: u64,
+    pub(super) epoch: u64,
+}
+
 impl Catalog {
+    pub(crate) fn playlist_binding(&self, generation: u64) -> Result<PlaylistRead> {
+        self.apple
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Apple Music unavailable"))?
+            .playlist_binding(generation)
+    }
+
+    pub(crate) fn check_playlist_binding(&self, binding: PlaylistRead) -> Result<()> {
+        ensure!(
+            self.playlist_binding(binding.generation)? == binding,
+            "Playlist changed while loading; refresh the playlist"
+        );
+        Ok(())
+    }
+
     pub async fn playlist(
         &self,
         playlist: &PlaylistRef,
         limits: Limits,
         progress: impl FnMut(usize),
     ) -> Result<PreparedAlbum> {
+        let generation = self
+            .account_generation()
+            .ok_or_else(|| anyhow::anyhow!("No current Apple Music account"))?;
+        self.prepare_playlist(
+            playlist,
+            self.playlist_binding(generation)?,
+            limits,
+            progress,
+        )
+        .await
+    }
+
+    pub(crate) async fn prepare_playlist(
+        &self,
+        playlist: &PlaylistRef,
+        binding: PlaylistRead,
+        limits: Limits,
+        progress: impl FnMut(usize),
+    ) -> Result<PreparedAlbum> {
         playlist.validate()?;
-        let account = self.playlist_account()?;
-        let prepared = self
-            .collect_context(
-                &format!("open:library-playlists:{}", playlist.id),
-                playlist.context(),
-                limits,
-                progress,
+        // Collection uses the same profile and account from the first page through commit.
+        self.check_playlist_binding(binding)?;
+        self.collect_context(
+            &format!("open:library-playlists:{}", playlist.id),
+            playlist.context(),
+            Some(binding),
+            limits,
+            progress,
+        )
+        .await
+    }
+
+    pub(super) async fn playlist_page(
+        &self,
+        kind: &str,
+        cursor: &str,
+        storefront: &str,
+        limits: Limits,
+        binding: PlaylistRead,
+    ) -> Result<Page> {
+        use tokio::time::{Instant, sleep_until, timeout};
+        timeout(Duration::from_secs(75), async {
+            loop {
+                self.check_playlist_binding(binding)?;
+                let result = self
+                    .browse(kind, "", Some(cursor), storefront, limits)
+                    .await;
+                self.check_playlist_binding(binding)?;
+                let Some(limit) = result
+                    .as_ref()
+                    .err()
+                    .and_then(|error| error.downcast_ref::<super::reads::LocalBudget>())
+                else {
+                    return result;
+                };
+                // No active read or provider permit survives into this wait.
+                while Instant::now() < limit.retry_at {
+                    sleep_until(
+                        limit
+                            .retry_at
+                            .min(Instant::now() + Duration::from_millis(250)),
+                    )
+                    .await;
+                    self.check_playlist_binding(binding)?;
+                }
+            }
+        })
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Apple Music playlist page timed out waiting for the request budget; retry"
             )
-            .await?;
-        ensure!(
-            self.playlist_account()? == account,
-            "Account credentials changed during playlist preparation; nothing committed"
-        );
-        Ok(prepared)
+        })?
     }
 }
 pub fn page_cursor(storefront: &str, generation: u64, offset: usize) -> String {

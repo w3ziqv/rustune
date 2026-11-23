@@ -75,7 +75,7 @@ impl AppleCatalog {
                 .budget
                 .reserve("Apple Music")
                 .map_err(|e| WriteFailure::rejected(e.to_string()))?;
-            self.clear_cache(&mut state);
+            self.invalidate_playlist_cache(&mut state);
         }
         let response = self
             .client
@@ -141,7 +141,7 @@ impl AppleCatalog {
                 ));
             }
         };
-        self.clear_cache(&mut self.state.lock().expect("Apple catalog state"));
+        self.invalidate_playlist_cache(&mut self.state.lock().expect("Apple catalog state"));
         Ok(result)
     }
 }

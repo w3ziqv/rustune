@@ -503,20 +503,17 @@ impl Engine {
             _ => {}
         }
         match request {
-            Request::PlaylistWrite { .. } => self.begin_playlist_write(request)?,
+            Request::PlaylistWrite { .. } => self.begin_playlist_write(request, None)?,
             Request::RetryPlaylistWrite => {
-                ensure!(
-                    self.playlist_write_status
-                        .as_ref()
-                        .is_some_and(|s| s.can_retry
-                            && s.account_generation == self.catalog.account_generation()),
-                    "Playlist outcome needs review or is already confirmed; automatic retry is disabled"
-                );
+                let expected = self.playlist_write_status.as_ref()
+                    .filter(|status| status.can_retry)
+                    .and_then(|status| status.account_generation)
+                    .context("Playlist outcome needs review or is already confirmed; automatic retry is disabled")?;
                 let request = self
                     .playlist_write_retry
                     .clone()
                     .context("No playlist operation to retry")?;
-                self.begin_playlist_write(request)?;
+                self.begin_playlist_write(request, Some(expected))?;
             }
             Request::Equalizer(settings) => {
                 settings.validate()?;

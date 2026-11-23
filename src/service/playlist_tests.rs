@@ -26,8 +26,10 @@ async fn playlist_play_starts_second_duplicate_by_source_position() {
             title: "Fixture".into(),
             can_edit: true,
         },
+        account_generation: e.catalog.account_generation(),
         action: ContextAction::PlayFromPosition {
             source_index: 26,
+            expected_song: Some("26".into()),
             shuffle: false,
         },
     })
@@ -248,23 +250,85 @@ async fn pending_account_response_does_not_block_pause_volume_or_status() {
     e.stop_audio().await;
 }
 
+fn fixture_playlist_page(
+    ids: impl IntoIterator<Item = usize>,
+    total: usize,
+    more: bool,
+) -> serde_json::Value {
+    let data = ids
+        .into_iter()
+        .map(|id| {
+            json!({
+                "id":format!("i.{id}"), "type":"library-songs",
+                "attributes":{"name":format!("Song {id}"),"playParams":{"catalogId":id.to_string()}}
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut page = json!({"data":data,"meta":{"total":total}});
+    if more {
+        page["next"] = json!("ignored-url");
+    }
+    page
+}
+
+fn play_at(e: &Engine, key: &str, index: usize, id: &str) -> Request {
+    Request::Playlist {
+        key: key.into(),
+        revision: e.queue.revision,
+        playlist: PlaylistRef {
+            id: "p.fixture".into(),
+            storefront: "pl".into(),
+            title: "Fixture".into(),
+            can_edit: true,
+        },
+        account_generation: e.catalog.account_generation(),
+        action: ContextAction::PlayFromPosition {
+            source_index: index,
+            expected_song: Some(id.into()),
+            shuffle: false,
+        },
+    }
+}
+
+async fn prepared_event(e: &mut Engine) -> operations::AlbumEvent {
+    tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            let event = e.album_events.recv().await.unwrap();
+            if matches!(event, operations::AlbumEvent::Done(..)) {
+                return event;
+            }
+            e.album_event(event).await;
+        }
+    })
+    .await
+    .expect("playlist preparation completed")
+}
+
+async fn advance_budget_by(seconds: u64) {
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(seconds)).await;
+    tokio::time::resume();
+}
+
 #[tokio::test]
-async fn prefetched_pages_leave_budget_to_play_from_a_450_track_playlist() {
+async fn a_450_track_playlist_reads_fresh_after_prefetch_and_waits_for_budget() {
     let (_dir, mut e) = super::tests::engine();
     let driver = Arc::new(crate::backend::testing::Controlled::default());
     e.factory = driver.clone();
-    let mut bodies = vec![json!({"data":[{"id":"pl"}]})];
-    for offset in (0..450).step_by(25) {
-        let data = (offset..offset + 25).map(|i| json!({
-            "id":format!("i.{i}"),"type":"library-songs",
-            "attributes":{"name":format!("Song {i}"),"playParams":{"catalogId":(i+1).to_string()}}
-        })).collect::<Vec<_>>();
-        let mut page = json!({"data":data,"meta":{"total":450}});
-        if offset + 25 < 450 {
-            page["next"] = json!("ignored-url");
-        }
-        bodies.push(page);
-    }
+    e.queue = Queue::default();
+    e.queue
+        .push(Track {
+            id: "9".into(),
+            kind: "songs".into(),
+            ..Track::default()
+        })
+        .unwrap();
+    e.queue.select(0);
+    e.start_audio(0).await.unwrap();
+    let page =
+        |offset: usize| fixture_playlist_page(offset + 1..=offset + 25, 450, offset + 25 < 450);
+    let mut bodies = vec![json!({"data":[{"id":"pl"}]}), page(0), page(25)];
+    bodies.extend((0..450).step_by(25).map(page));
     let (_catalog_dir, catalog, http) = crate::catalog::playlist_tests::fixture(bodies).await;
     e.catalog = Arc::new(catalog);
     let kind = "open:library-playlists:p.fixture";
@@ -274,51 +338,269 @@ async fn prefetched_pages_leave_budget_to_play_from_a_450_track_playlist() {
         .browse(kind, "", None, "pl", limits)
         .await
         .unwrap();
-    assert_eq!(first.items[20].id, "21");
     e.catalog
         .browse(kind, "", first.next.as_deref(), "pl", limits)
         .await
         .unwrap();
-    e.handle(Request::Playlist {
-        key: "start-prefetched".into(),
-        revision: e.queue.revision,
-        playlist: PlaylistRef {
-            id: "p.fixture".into(),
-            storefront: "pl".into(),
-            title: "Fixture".into(),
-            can_edit: true,
-        },
-        action: ContextAction::PlayFromPosition {
-            source_index: 20,
-            shuffle: false,
-        },
-    })
-    .await
-    .unwrap();
+    advance_budget_by(31).await;
+
+    e.handle(play_at(&e, "start-after-prefetch", 20, "21"))
+        .await
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(4), async {
-        loop {
+        while e.operation.as_ref().unwrap().loaded < 425 {
             let event = e.album_events.recv().await.unwrap();
-            let done = matches!(event, operations::AlbumEvent::Done(..));
+            assert!(matches!(event, operations::AlbumEvent::Progress(..)));
             e.album_event(event).await;
-            if done {
-                break;
-            }
         }
-        let done = e.disk_events.recv().await.unwrap();
-        e.disk_complete(done).await;
     })
     .await
     .unwrap();
+    assert!(
+        !http.is_finished(),
+        "21st HTTP must wait for the rolling limit"
+    );
+    tokio::task::yield_now().await;
+    let started = std::time::Instant::now();
+    e.handle(Request::Pause).await.unwrap();
+    let status: Status = serde_json::from_value(e.handle(Request::Status).await.unwrap()).unwrap();
+    assert_eq!(status.operation.unwrap().phase, "preparing");
+    assert!(started.elapsed() < Duration::from_millis(100));
+    assert_eq!(
+        driver.starts().len(),
+        1,
+        "waiting leaves the current audio helper alone"
+    );
+
+    advance_budget_by(30).await;
+    let event = prepared_event(&mut e).await;
+    e.album_event(event).await;
+    let done = tokio::time::timeout(Duration::from_secs(2), e.disk_events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    e.disk_complete(done).await;
     assert_eq!(e.queue.tracks.len(), 450);
     assert_eq!(e.queue.current, Some(20));
-    assert_eq!(driver.starts().len(), 1);
     let requests = tokio::time::timeout(Duration::from_secs(2), http)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(requests.len(), 19, "18 pages and one storefront");
-    for (page, request) in requests.iter().skip(1).enumerate() {
+    assert_eq!(
+        requests.len(),
+        21,
+        "prefetch, 18 fresh pages, and one storefront"
+    );
+    for (page, request) in requests.iter().skip(3).enumerate() {
         let offset = page * 25;
         assert!(request.contains(&format!("offset={offset}&")), "{request}");
     }
+}
+
+#[tokio::test]
+async fn reordered_page_boundary_reads_fresh_and_checks_the_original_occurrence() {
+    let (_dir, mut e) = super::tests::engine();
+    let old_first = fixture_playlist_page(1..=25, 50, true);
+    let first = fixture_playlist_page((1..=24).chain([26]), 50, true);
+    let second = fixture_playlist_page([25].into_iter().chain(27..=50), 50, false);
+    let (_catalog_dir, catalog, http) = crate::catalog::playlist_tests::fixture(vec![
+        json!({"data":[{"id":"pl"}]}),
+        old_first,
+        first.clone(),
+        second.clone(),
+        first,
+        second,
+    ])
+    .await;
+    e.catalog = Arc::new(catalog);
+    let view = e
+        .catalog
+        .browse(
+            "open:library-playlists:p.fixture",
+            "",
+            None,
+            "pl",
+            e.config.performance.limits(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(view.items[24].id, "25");
+
+    e.handle(play_at(&e, "moved-selection", 24, "25"))
+        .await
+        .unwrap();
+    let event = prepared_event(&mut e).await;
+    e.album_event(event).await;
+    assert!(
+        e.operation
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("occurrence changed")
+    );
+    assert!(e.pending.is_none());
+    assert_eq!(e.queue.tracks.len(), 3);
+
+    e.handle(play_at(&e, "reopened-selection", 24, "26"))
+        .await
+        .unwrap();
+    let event = prepared_event(&mut e).await;
+    e.album_event(event).await;
+    let done = tokio::time::timeout(Duration::from_secs(2), e.disk_events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    e.disk_complete(done).await;
+    let ids: Vec<_> = e
+        .queue
+        .tracks
+        .iter()
+        .map(|entry| entry.track.id.as_str())
+        .collect();
+    assert_eq!(ids.len(), 50);
+    assert_eq!(&ids[23..27], &["24", "26", "25", "27"]);
+    assert_eq!(e.queue.current, Some(24));
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), http)
+            .await
+            .unwrap()
+            .unwrap()
+            .len(),
+        6
+    );
+}
+
+#[tokio::test]
+async fn account_rotation_rejects_queue_work_before_start_and_after_download() {
+    let (_dir, mut e) = super::tests::engine();
+    let (account_dir, catalog, http) = crate::catalog::playlist_tests::fixture(vec![
+        json!({"data":[{"id":"pl"}]}),
+        fixture_playlist_page([1], 1, false),
+    ])
+    .await;
+    let paths = crate::config::Paths {
+        config: account_dir.path().join("c"),
+        data: account_dir.path().join("d"),
+        cache: account_dir.path().join("a"),
+        runtime: account_dir.path().join("r"),
+    };
+    e.catalog = Arc::new(catalog);
+    let stale = play_at(&e, "stale", 0, "1");
+    let change = || {
+        crate::auth::save_user_token(
+            &paths,
+            &crate::auth::SecretToken::parse("fixture-user").unwrap(),
+        )
+        .unwrap()
+    };
+    change();
+    assert!(
+        e.handle(stale)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("credentials changed")
+    );
+    assert!(e.preparing.is_none());
+
+    e.handle(play_at(&e, "prepared-then-changed", 0, "1"))
+        .await
+        .unwrap();
+    let event = prepared_event(&mut e).await;
+    assert!(matches!(&event, operations::AlbumEvent::Done(_, _, Ok(_))));
+    change();
+    e.album_event(event).await;
+    assert!(
+        e.operation
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("credentials changed")
+    );
+    assert!(e.pending.is_none());
+    assert_eq!(e.queue.tracks.len(), 3);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), http)
+            .await
+            .unwrap()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn account_rotation_cancels_a_playlist_waiting_for_local_budget() {
+    let (_dir, mut e) = super::tests::engine();
+    let mut responses = vec![json!({"data":[{"id":"pl"}]})];
+    responses.extend((0..19).map(|_| json!({"data":[]})));
+    let (directory, catalog, http) = crate::catalog::playlist_tests::fixture(responses).await;
+    let paths = crate::config::Paths {
+        config: directory.path().join("c"),
+        data: directory.path().join("d"),
+        cache: directory.path().join("a"),
+        runtime: directory.path().join("r"),
+    };
+    e.catalog = Arc::new(catalog);
+    for _ in 0..19 {
+        e.catalog
+            .browse("playlists", "", None, "pl", e.config.performance.limits())
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), http)
+            .await
+            .unwrap()
+            .unwrap()
+            .len(),
+        20
+    );
+    e.handle(play_at(&e, "wait-then-rotate", 0, "1"))
+        .await
+        .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), e.album_events.recv())
+            .await
+            .is_err()
+    );
+    let token = crate::auth::SecretToken::parse("new-fixture-token").unwrap();
+    crate::auth::save_user_token(&paths, &token).unwrap();
+    advance_budget_by(1).await;
+    let event = prepared_event(&mut e).await;
+    e.album_event(event).await;
+    assert!(
+        e.operation
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("credentials changed")
+    );
+    assert!(e.pending.is_none());
+    assert_eq!(e.queue.tracks.len(), 3);
+}
+
+#[tokio::test]
+async fn retry_playlist_write_uses_the_previous_operations_generation() {
+    let (_dir, mut e) = super::tests::engine();
+    let folder = tempfile::tempdir().unwrap();
+    let paths = crate::catalog::playlist_tests::paths(folder.path());
+    e.catalog = Arc::new(Catalog::new(&paths).unwrap());
+    let generation = e.catalog.account_generation();
+    e.playlist_write_status = Some(playlist_write::PlaylistWriteStatus {
+        id: "retry-previous".into(),
+        phase: "rejected".into(),
+        can_retry: true,
+        account_generation: generation,
+        ..Default::default()
+    });
+    e.playlist_write_retry = Some(create("retry-previous", PlaylistWriteSource::Empty));
+    crate::auth::save_user_token(
+        &paths,
+        &crate::auth::SecretToken::parse("new-fixture-token").unwrap(),
+    )
+    .unwrap();
+    let error = e.handle(Request::RetryPlaylistWrite).await.unwrap_err();
+    assert!(error.to_string().contains("credentials changed"));
+    assert!(e.playlist_write_task.is_none());
 }

@@ -21,6 +21,7 @@ pub(super) enum After {
     Undo,
 }
 pub(super) struct Pending {
+    pub(super) private_playlist: bool,
     pub after: After,
     pub undo: Option<Queue>,
     pub reply: Option<oneshot::Sender<Reply>>,
@@ -36,15 +37,19 @@ pub(super) enum AlbumEvent {
 }
 enum DownloadSource {
     Album(crate::catalog::album::AlbumRef),
-    Playlist(crate::catalog::playlist::PlaylistRef),
+    Playlist(
+        crate::catalog::playlist::PlaylistRef,
+        crate::catalog::playlist::PlaylistRead,
+    ),
 }
 pub(super) struct Preparing {
     generation: u64,
-    key: String,
+    pub(super) key: String,
     revision: u64,
     fingerprint: String,
     action: AlbumAction,
     pub(super) task: tokio::task::JoinHandle<()>,
+    pub(super) playlist_read: Option<crate::catalog::playlist::PlaylistRead>,
 }
 impl Engine {
     fn fingerprint(request: &Request) -> Result<String> {
@@ -80,6 +85,18 @@ impl Engine {
         key: String,
         fingerprint: String,
     ) -> Result<()> {
+        self.stage_guarded(queue, after, undo, key, fingerprint, None)
+    }
+
+    fn stage_guarded(
+        &mut self,
+        queue: Queue,
+        after: After,
+        undo: Option<Queue>,
+        key: String,
+        fingerprint: String,
+        account_guard: Option<nix::fcntl::Flock<std::fs::File>>,
+    ) -> Result<()> {
         ensure!(
             self.pending.is_none(),
             "Queue write in progress; retry after it completes"
@@ -113,6 +130,7 @@ impl Engine {
         let tx = self.disk_tx.clone();
         self.staged_transport_epoch = self.transport_epoch;
         self.pending = Some(Pending {
+            private_playlist: account_guard.is_some(),
             after,
             undo,
             reply: None,
@@ -132,6 +150,7 @@ impl Engine {
         }
         tokio::spawn(async move {
             let done = tokio::task::spawn_blocking(move || {
+                let _account_guard = account_guard;
                 let result = persistence::store(&paths, &state, max);
                 DiskDone { state, result }
             })
@@ -151,6 +170,17 @@ impl Engine {
         revision: u64,
         action: QueueAction,
         fingerprint: String,
+    ) -> Result<()> {
+        self.queue_action_guarded(key, revision, action, fingerprint, None)
+    }
+
+    fn queue_action_guarded(
+        &mut self,
+        key: String,
+        revision: u64,
+        action: QueueAction,
+        fingerprint: String,
+        account_guard: Option<nix::fcntl::Flock<std::fs::File>>,
     ) -> Result<()> {
         if self.seen_request(&key, &fingerprint)? {
             self.message = "Operation already committed; no duplicate entries added".into();
@@ -263,7 +293,7 @@ impl Engine {
                 }
             }
         }
-        self.stage(q, after, undo, key, fingerprint)
+        self.stage_guarded(q, after, undo, key, fingerprint, account_guard)
     }
     pub(super) async fn disk_complete(&mut self, done: DiskDone) {
         let Some(mut pending) = self.pending.take() else {
@@ -359,10 +389,23 @@ impl Engine {
                 key,
                 revision,
                 playlist,
+                account_generation,
                 action,
             } => {
                 playlist.validate()?;
-                (key, revision, DownloadSource::Playlist(playlist), action)
+                ensure!(
+                    self.playlist_write_task.is_none(),
+                    "A playlist write is in progress; retry after it finishes"
+                );
+                let generation =
+                    account_generation.context("Open the playlist under the current account")?;
+                let binding = self.catalog.playlist_binding(generation)?;
+                (
+                    key,
+                    revision,
+                    DownloadSource::Playlist(playlist, binding),
+                    action,
+                )
             }
             _ => anyhow::bail!("Invalid album/playlist request"),
         };
@@ -398,14 +441,20 @@ impl Engine {
         });
         self.album_generation = self.album_generation.wrapping_add(1);
         let generation = self.album_generation;
+        let playlist_read = match &source {
+            DownloadSource::Playlist(_, binding) => Some(*binding),
+            DownloadSource::Album(_) => None,
+        };
         let task = tokio::spawn(async move {
             let progress = |n| {
                 let _ = tx.try_send(AlbumEvent::Progress(generation, id.clone(), n));
             };
             let prepared = match source {
                 DownloadSource::Album(album) => catalog.album(&album, limits, progress).await,
-                DownloadSource::Playlist(playlist) => {
-                    catalog.playlist(&playlist, limits, progress).await
+                DownloadSource::Playlist(playlist, binding) => {
+                    catalog
+                        .prepare_playlist(&playlist, binding, limits, progress)
+                        .await
                 }
             };
             let _ = tx.send(AlbumEvent::Done(generation, id, prepared)).await;
@@ -417,6 +466,7 @@ impl Engine {
             fingerprint,
             action,
             task,
+            playlist_read,
         });
         Ok(())
     }
@@ -451,13 +501,14 @@ impl Engine {
                         let action = match pending.action {
                             AlbumAction::PlayFromPosition {
                                 source_index,
+                                expected_song,
                                 shuffle,
                             } => {
-                                let start = album
-                                    .tracks
-                                    .iter()
-                                    .position(|t| t.source_index == Some(source_index));
-                                start.context("Selected playlist occurrence is unavailable; queue unchanged").map(|start|QueueAction::PlayContext{tracks:album.tracks,context:album.context,start,shuffle})
+                                let start = album.tracks.iter().position(|t| {
+                                    t.source_index == Some(source_index)
+                                        && expected_song.as_ref().is_none_or(|song| song == &t.id)
+                                });
+                                start.context("Selected playlist occurrence changed or is unavailable; reopen the playlist").map(|start|QueueAction::PlayContext{tracks:album.tracks,context:album.context,start,shuffle})
                             }
                             AlbumAction::Append => Ok(QueueAction::Append {
                                 tracks: album.tracks,
@@ -489,18 +540,27 @@ impl Engine {
                                     })
                             }
                         };
-                        match action {
-                            Ok(action) => {
-                                self.queue_action(
-                                    pending.key,
-                                    pending.revision,
-                                    action,
-                                    pending.fingerprint,
-                                )
-                                .await
-                            }
-                            Err(error) => Err(error),
-                        }
+                        action.and_then(|action| {
+                            ensure!(
+                                album.playlist_read == pending.playlist_read,
+                                "Playlist preparation no longer matches the requested account"
+                            );
+                            let account_guard = album
+                                .playlist_read
+                                .map(|binding| {
+                                    let guard = self.catalog.private_publication()?;
+                                    self.catalog.check_playlist_binding(binding)?;
+                                    Ok::<_, anyhow::Error>(guard)
+                                })
+                                .transpose()?;
+                            self.queue_action_guarded(
+                                pending.key,
+                                pending.revision,
+                                action,
+                                pending.fingerprint,
+                                account_guard,
+                            )
+                        })
                     }
                 };
                 if let Some(op) = &mut self.operation {

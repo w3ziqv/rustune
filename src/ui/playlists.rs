@@ -90,6 +90,7 @@ impl App {
             key: ipc::operation_key(),
             revision: self.revision(),
             playlist,
+            account_generation: self.account_generation,
             action,
         }
     }

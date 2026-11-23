@@ -1,6 +1,9 @@
 //! Fixed-origin Apple Music catalog and private-library search.
 mod playlist_write;
-use super::reads::{Budget, Reads};
+use super::{
+    playlist::PlaylistRead,
+    reads::{Budget, LocalBudget, Reads},
+};
 use crate::{
     artwork,
     auth::{TokenStamp, token_publication, token_stamp},
@@ -31,7 +34,7 @@ struct Account {
     generation: u64,
 }
 struct State {
-    cache: Cache<String, (Instant, Page)>,
+    cache: Cache<String, Page>,
     stamp: Option<TokenStamp>,
     region: Option<(Instant, Option<String>)>,
     budget: Budget,
@@ -60,7 +63,6 @@ struct MusicPage {
     size: usize,
     max_results: usize,
     page_size: usize,
-    reuse_playlist: bool,
     playlist_epoch: Option<u64>,
     account: Option<Account>,
     storefront: String,
@@ -152,7 +154,7 @@ impl AppleCatalog {
         if current != state.stamp {
             state.stamp = current;
             state.region = None;
-            self.clear_cache(state);
+            self.invalidate_playlist_cache(state);
         }
         current.map(|stamp| Account {
             generation: stamp.generation(),
@@ -178,8 +180,19 @@ impl AppleCatalog {
     fn clear_cache(&self, state: &mut State) {
         let capacity = self.capacity.load(Ordering::Relaxed);
         state.cache = Cache::new(capacity);
-        state.playlist_epoch = state.playlist_epoch.wrapping_add(1);
         self.entries.store(0, Ordering::Relaxed);
+    }
+
+    fn invalidate_playlist_cache(&self, state: &mut State) {
+        state.playlist_epoch = state.playlist_epoch.wrapping_add(1);
+        self.clear_cache(state);
+    }
+
+    pub(super) fn playlist_binding(&self, generation: u64) -> Result<PlaylistRead> {
+        self.with_account(Some(Account { generation }), |state| PlaylistRead {
+            generation,
+            epoch: state.playlist_epoch,
+        })
     }
 
     fn check_account(&self, expected: Option<Account>) -> Result<()> {
@@ -207,6 +220,12 @@ impl AppleCatalog {
                     return Ok(region);
                 }
                 let response = catalog.get("me/storefront", &[], Some(account)).await;
+                if response
+                    .as_ref()
+                    .is_err_and(|error| error.is::<LocalBudget>())
+                {
+                    return response.map(|_| None);
+                }
                 let region = response.ok().and_then(|value| {
                     let region = value["data"][0]["id"].as_str()?;
                     (region.len() == 2 && region.bytes().all(|b| b.is_ascii_alphabetic()))
@@ -303,7 +322,6 @@ impl AppleCatalog {
         serde_json::from_slice(&body)
             .map_err(|_| anyhow!("Apple Music returned invalid search metadata"))
     }
-    #[cfg(test)]
     pub async fn browse(
         &self,
         kind: &str,
@@ -312,23 +330,10 @@ impl AppleCatalog {
         country: &str,
         limits: Limits,
     ) -> Result<Page> {
-        self.browse_with_playlist_pages(kind, term, next, country, limits, false)
-            .await
-    }
-
-    pub(super) async fn browse_with_playlist_pages(
-        &self,
-        kind: &str,
-        term: &str,
-        next: Option<&str>,
-        country: &str,
-        limits: Limits,
-        reuse_playlist: bool,
-    ) -> Result<Page> {
         self.set_capacity(limits.cache_entries);
         tokio::time::timeout(
             Duration::from_secs(15),
-            self.browse_inner(kind, term, next, country, limits, reuse_playlist),
+            self.browse_inner(kind, term, next, country, limits),
         )
         .await
         .map_err(|_| anyhow!("Apple Music search timed out; retry"))?
@@ -340,7 +345,6 @@ impl AppleCatalog {
         next: Option<&str>,
         country: &str,
         limits: Limits,
-        reuse_playlist: bool,
     ) -> Result<Page> {
         ensure!(
             country.len() == 2 && country.bytes().all(|b| b.is_ascii_alphabetic()),
@@ -458,7 +462,6 @@ impl AppleCatalog {
             size,
             max_results,
             page_size,
-            reuse_playlist,
             playlist_epoch,
             account,
             storefront,
@@ -492,7 +495,6 @@ impl AppleCatalog {
             size,
             max_results,
             page_size,
-            reuse_playlist,
             playlist_epoch,
             account,
             storefront,
@@ -500,18 +502,11 @@ impl AppleCatalog {
         let kind = kind.as_str();
         let private = account.is_some();
         let playlist_tracks = kind.starts_with("open:library-playlists:");
-        if let Some(page) = self.with_account(account, |state| {
-            if kind == "playlists" || (playlist_tracks && !reuse_playlist) {
-                return None;
-            }
-            state
-                .cache
-                .get(&key)
-                .filter(|(cached, _)| {
-                    !playlist_tracks || cached.elapsed() <= Duration::from_secs(30)
-                })
-                .map(|(_, page)| page.clone())
-        })? {
+        let mutable_playlist = kind == "playlists" || playlist_tracks;
+        if !mutable_playlist
+            && let Some(page) =
+                self.with_account(account, |state| state.cache.get(&key).cloned())?
+        {
             return Ok(page);
         }
         let mut params = vec![("limit", size.to_string()), ("offset", offset.to_string())];
@@ -648,10 +643,8 @@ impl AppleCatalog {
             if state.cache.capacity != self.capacity.load(Ordering::Relaxed) {
                 self.clear_cache(state);
             }
-            if kind != "playlists"
-                && playlist_epoch.is_none_or(|epoch| epoch == state.playlist_epoch)
-            {
-                state.cache.insert(key, (Instant::now(), page.clone()));
+            if !mutable_playlist {
+                state.cache.insert(key, page.clone());
             }
             self.entries
                 .store(state.cache.entries.len(), Ordering::Relaxed);

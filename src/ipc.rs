@@ -20,6 +20,8 @@ pub enum Request {
         key: String,
         revision: u64,
         playlist: crate::catalog::playlist::PlaylistRef,
+        #[serde(default)]
+        account_generation: Option<u64>,
         action: ContextAction,
     },
     PlaylistWrite {
@@ -189,6 +191,8 @@ pub enum QueueAction {
 pub enum ContextAction {
     PlayFromPosition {
         source_index: usize,
+        #[serde(default)]
+        expected_song: Option<String>,
         shuffle: bool,
     },
     Play {

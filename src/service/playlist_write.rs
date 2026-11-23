@@ -67,7 +67,11 @@ impl Engine {
             })
             .collect()
     }
-    pub(super) fn begin_playlist_write(&mut self, request: Request) -> Result<()> {
+    pub(super) fn begin_playlist_write(
+        &mut self,
+        request: Request,
+        expected: Option<u64>,
+    ) -> Result<()> {
         let Request::PlaylistWrite {
             key,
             source,
@@ -80,12 +84,25 @@ impl Engine {
             playlist_journal::valid_key(key),
             "Invalid playlist write key"
         );
+        let (account, generation) = {
+            let _publication = self.catalog.private_publication()?;
+            let account = self.catalog.playlist_account()?;
+            let generation = self
+                .catalog
+                .account_generation()
+                .context("No current Apple Music account")?;
+            ensure!(
+                expected.is_none_or(|expected| expected == generation),
+                "Account credentials changed; inspect the previous playlist operation"
+            );
+            (account, generation)
+        };
         if let Some(last) = &self.playlist_write_status
             && last.id == *key
             && self.playlist_write_task.is_some()
         {
             ensure!(
-                last.account_generation == self.catalog.account_generation(),
+                last.account_generation == Some(generation),
                 "Account credentials changed; wait for the previous playlist operation"
             );
             ensure!(
@@ -100,15 +117,20 @@ impl Engine {
             self.playlist_write_task.is_none(),
             "Another account write is in progress"
         );
-        let (account, generation) = {
-            let _publication = self.catalog.private_publication()?;
-            let account = self.catalog.playlist_account()?;
-            let generation = self
-                .catalog
-                .account_generation()
-                .context("No current Apple Music account")?;
-            (account, generation)
-        };
+        ensure!(
+            self.pending
+                .as_ref()
+                .is_none_or(|pending| !pending.private_playlist),
+            "Playlist queue commit is in progress; retry after it finishes"
+        );
+        if let Some(key) = self
+            .preparing
+            .as_ref()
+            .filter(|pending| pending.playlist_read.is_some())
+            .map(|pending| pending.key.clone())
+        {
+            self.cancel_operation(&key)?;
+        }
         let fingerprint = serde_json::to_string(&request)?;
         let ids = self.export_ids(source).map_err(|e| e.to_string());
         let paths = self.paths.clone();

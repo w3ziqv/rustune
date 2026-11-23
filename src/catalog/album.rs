@@ -54,6 +54,7 @@ pub struct PreparedAlbum {
     pub tracks: Vec<Track>,
     pub skipped: Vec<Skipped>,
     pub context: QueueContext,
+    pub(crate) playlist_read: Option<super::playlist::PlaylistRead>,
 }
 impl Catalog {
     pub async fn album(
@@ -66,6 +67,7 @@ impl Catalog {
         self.collect_context(
             &format!("open:albums:{}", album.id),
             album.context(),
+            None,
             limits,
             progress,
         )
@@ -75,12 +77,16 @@ impl Catalog {
         &self,
         kind: &str,
         context: QueueContext,
+        playlist_read: Option<super::playlist::PlaylistRead>,
         limits: Limits,
         mut progress: impl FnMut(usize),
     ) -> Result<PreparedAlbum> {
-        let first_cursor = (!super::playlist::private_kind(kind))
-            .then(|| format!("{}:{}:0", context.provider, context.storefront));
-        let mut cursor = Some(first_cursor);
+        let mut cursor = Some(match playlist_read {
+            Some(binding) => {
+                super::playlist::page_cursor(&context.storefront, binding.generation, 0)
+            }
+            None => format!("{}:{}:0", context.provider, context.storefront),
+        });
         let mut tracks = Vec::new();
         let mut skipped = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -96,16 +102,16 @@ impl Catalog {
                 seen.len() <= MAX_QUEUE,
                 "Album/playlist page limit reached; nothing committed"
             );
-            let page = self
-                .browse_with_playlist_pages(
-                    kind,
-                    "",
-                    next.as_deref(),
-                    &context.storefront,
-                    limits,
-                    true,
-                )
-                .await?;
+            let page = match playlist_read {
+                Some(binding) => {
+                    self.playlist_page(kind, &next, &context.storefront, limits, binding)
+                        .await?
+                }
+                None => {
+                    self.browse(kind, "", Some(&next), &context.storefront, limits)
+                        .await?
+                }
+            };
             ensure!(
                 page.storefront
                     .as_deref()
@@ -161,7 +167,7 @@ impl Catalog {
                 tracks.push(track);
             }
             progress(count);
-            cursor = page.next.map(Some);
+            cursor = page.next;
         }
         ensure!(
             expected.is_none_or(|total| total == count),
@@ -191,6 +197,7 @@ impl Catalog {
             tracks,
             skipped: summary,
             context,
+            playlist_read,
         })
     }
 }

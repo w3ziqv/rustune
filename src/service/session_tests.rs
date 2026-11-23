@@ -614,6 +614,7 @@ async fn cancelled_album_completion_cannot_commit_into_retry_with_same_key() {
             }],
             skipped: Vec::new(),
             context: QueueContext::single(),
+            playlist_read: None,
         }),
     ))
     .await;
