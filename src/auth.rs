@@ -1,6 +1,6 @@
 //! Local user-token entry. Storage never implies remote acceptance or playback.
 use crate::{
-    config::{Paths, private_write},
+    config::{Paths, private_dir, private_write},
     input::{InputEvent as Event, Reader},
 };
 use anyhow::{Result, anyhow, ensure};
@@ -98,6 +98,7 @@ pub(crate) fn token_stamp(paths: &Paths) -> Option<TokenStamp> {
 }
 
 pub fn save_user_token(paths: &Paths, token: &SecretToken) -> Result<()> {
+    private_dir(&paths.config)?;
     let _lock = token_lock(paths, FlockArg::LockExclusive)?;
     private_write(&paths.config.join("music-user-token"), token.0.as_bytes())
 }
@@ -111,6 +112,11 @@ pub fn has_user_token(paths: &Paths) -> bool {
     })
 }
 pub fn remove_user_token(paths: &Paths) -> Result<()> {
+    if std::fs::symlink_metadata(&paths.config)
+        .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+    {
+        return Ok(());
+    }
     let _lock = token_lock(paths, FlockArg::LockExclusive)?;
     let file = paths.config.join("music-user-token");
     match std::fs::symlink_metadata(&file) {
