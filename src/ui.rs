@@ -116,6 +116,7 @@ enum BrowseState {
     Loading,
     Ready,
     Failed,
+    Limited,
 }
 pub struct App {
     eq_selected: usize,
@@ -174,6 +175,18 @@ pub struct App {
     inspected_track: Option<Track>,
 }
 impl App {
+    fn private_view_guard(&mut self, paths: &Paths) -> Option<nix::fcntl::Flock<std::fs::File>> {
+        if !self.private_views_present() {
+            return None;
+        }
+        let lock = auth::token_publication(paths).ok();
+        let current = auth::token_stamp(paths).map(auth::TokenStamp::generation);
+        if lock.is_none() || current != self.account_generation {
+            self.invalidate_private_views();
+        }
+        lock
+    }
+
     fn dispatch(&mut self, jobs: &mpsc::Sender<Request>, request: Request) {
         if matches!(request, Request::Browse { .. }) {
             self.browse_state = BrowseState::Loading;
@@ -486,6 +499,7 @@ impl App {
         self.album_actions = None;
         self.album_view = None;
         self.playlist_view = None;
+        self.playlist_bytes = 0;
         self.playlist_dialog = None;
         if screen != Screen::Playlists {
             self.playlist_target = None;
@@ -778,6 +792,9 @@ impl App {
                     self.refresh_diagnostics();
                     return Ok((false, None));
                 }
+                KeyCode::Char('R') if self.browse_state == BrowseState::Limited => {
+                    return Ok((false, None));
+                }
                 KeyCode::Char('R')
                     if !matches!(self.screen, Screen::Lyrics | Screen::NowPlaying) =>
                 {
@@ -979,12 +996,14 @@ impl App {
                     } else if track.kind == "songs" || track.kind == "library-songs" {
                         self.open_song_actions(track);
                     } else {
+                        let playlist = self.selected_playlist();
+                        let album = self.selected_album();
                         self.remember_view();
                         self.catalog_offset = 0;
                         self.playlist_top = 0;
                         self.playlist_bytes = 0;
-                        self.playlist_view = self.selected_playlist();
-                        self.album_view = self.selected_album();
+                        self.playlist_view = playlist;
+                        self.album_view = album;
                         self.kind = format!("open:{}:{}", track.kind, track.id);
                         self.query.clear();
                         self.selected = 0;
@@ -1138,20 +1157,19 @@ impl App {
                 self.go(Screen::Equalizer);
             }
             Some("lyrics") => {
-                if matches!(
+                let inspect = matches!(
                     self.screen,
                     Screen::Search | Screen::Library | Screen::Playlists | Screen::Queue
-                ) {
-                    self.remember_view();
-                }
-                self.inspected_track = if matches!(
-                    self.screen,
-                    Screen::Search | Screen::Library | Screen::Playlists | Screen::Queue
-                ) {
+                );
+                let selected = if inspect {
                     self.items.get(self.selected).cloned()
                 } else {
                     None
                 };
+                if inspect {
+                    self.remember_view();
+                }
+                self.inspected_track = selected;
                 self.go(Screen::Lyrics);
                 if self.lyrics_preview() {
                     self.note = "Lyrics preview for the selected song; playback unchanged.".into();
@@ -1216,18 +1234,30 @@ impl App {
                     let bytes = if append { self.playlist_bytes } else { 0 };
                     let bytes = bytes + serde_json::to_vec(&p.items)?.len();
                     let count = if append { self.items.len() } else { 0 } + p.items.len();
-                    anyhow::ensure!(
-                        bytes <= crate::catalog::album::MAX_ALBUM_BYTES
-                            && count <= crate::queue::MAX_QUEUE,
-                        "Playlist exceeds the local viewing limit"
-                    );
+                    if bytes > crate::catalog::album::MAX_ALBUM_BYTES
+                        || count > crate::queue::MAX_QUEUE
+                    {
+                        self.next = None;
+                        self.browse_retry = None;
+                        self.browse_state = BrowseState::Limited;
+                        self.note = format!(
+                            "Playlist viewing limit reached · {} tracks loaded",
+                            self.items.len()
+                        );
+                        return Ok(());
+                    }
+                    self.trim_playlist_history(bytes);
                     self.playlist_bytes = bytes;
                 }
                 self.catalog_offset = next
                     .as_deref()
                     .and_then(|n| n.rsplit(':').next()?.parse().ok())
                     .unwrap_or(0);
-                self.browse_state = BrowseState::Ready;
+                self.browse_state = if p.truncated {
+                    BrowseState::Limited
+                } else {
+                    BrowseState::Ready
+                };
                 self.browse_retry = None;
                 self.catalog_context = p.context.unwrap_or_else(|| "Apple/iTunes catalog".into());
                 if append {
@@ -1241,11 +1271,18 @@ impl App {
                 }
                 self.next = p.next;
                 self.previous = p.previous;
-                self.note = format!(
-                    "{} results · {} · Enter actions/open · PgDn more",
-                    self.items.len(),
-                    self.catalog_context
-                );
+                self.note = if p.truncated {
+                    format!(
+                        "Catalog result limit reached · {} results",
+                        self.items.len()
+                    )
+                } else {
+                    format!(
+                        "{} results · {} · Enter actions/open · PgDn more",
+                        self.items.len(),
+                        self.catalog_context
+                    )
+                };
             }
             Request::QueuePage { offset } => {
                 if self.screen != Screen::Queue || *offset != self.queue_offset {
@@ -1887,6 +1924,7 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                 diagnostic_check.spawn(async move { (generation, diagnostics::inspect(&paths).await) });
             }
             if let Some(job)=app.auth_job.take() && auth_jobs.try_send(job).is_err(){app.note="Token storage is busy; try login again.".into();}
+            let publication = app.private_view_guard(&paths);
             let request=app.artwork_request(terminal.size()?);
             if request!=last_artwork {
                 last_artwork=request.clone();
@@ -1900,6 +1938,7 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                 dirty = false;
                 next_frame = tokio::time::Instant::now() + std::time::Duration::from_millis(16);
             }
+            drop(publication);
             tokio::select! {
                 _=tokio::time::sleep_until(next_frame), if dirty => {},
                 _=terminate.recv()=>break,
@@ -1933,6 +1972,7 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                 event=events.next()=>{
                     dirty=true;
                     let Some(event)=event else{break;};let event=event?;let mut request=None;
+                    let _publication = app.private_view_guard(&paths);
                     match event {
                         Event::Paste(text)=>{if let Some(input)=app.token_input.as_mut(){input.append(&text);}else if app.playlist_dialog.is_some(){app.playlist_paste(&text);}else if app.input!=Input::None && app.text.len()+text.len()<=512 {app.text.extend(text.chars().filter(|c|!c.is_control()));}},
                         Event::Overflow=>{if let Some(input)=app.token_input.as_mut(){input.reject_paste();}app.note="Paste exceeds 16 KiB or is invalid. Ctrl-U clears token input.".into();},

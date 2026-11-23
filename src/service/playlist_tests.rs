@@ -247,3 +247,78 @@ async fn pending_account_response_does_not_block_pause_volume_or_status() {
     assert_eq!(http.await.unwrap().len(), 2);
     e.stop_audio().await;
 }
+
+#[tokio::test]
+async fn prefetched_pages_leave_budget_to_play_from_a_450_track_playlist() {
+    let (_dir, mut e) = super::tests::engine();
+    let driver = Arc::new(crate::backend::testing::Controlled::default());
+    e.factory = driver.clone();
+    let mut bodies = vec![json!({"data":[{"id":"pl"}]})];
+    for offset in (0..450).step_by(25) {
+        let data = (offset..offset + 25).map(|i| json!({
+            "id":format!("i.{i}"),"type":"library-songs",
+            "attributes":{"name":format!("Song {i}"),"playParams":{"catalogId":(i+1).to_string()}}
+        })).collect::<Vec<_>>();
+        let mut page = json!({"data":data,"meta":{"total":450}});
+        if offset + 25 < 450 {
+            page["next"] = json!("ignored-url");
+        }
+        bodies.push(page);
+    }
+    let (_catalog_dir, catalog, http) = crate::catalog::playlist_tests::fixture(bodies).await;
+    e.catalog = Arc::new(catalog);
+    let kind = "open:library-playlists:p.fixture";
+    let limits = e.config.performance.limits();
+    let first = e
+        .catalog
+        .browse(kind, "", None, "pl", limits)
+        .await
+        .unwrap();
+    assert_eq!(first.items[20].id, "21");
+    e.catalog
+        .browse(kind, "", first.next.as_deref(), "pl", limits)
+        .await
+        .unwrap();
+    e.handle(Request::Playlist {
+        key: "start-prefetched".into(),
+        revision: e.queue.revision,
+        playlist: PlaylistRef {
+            id: "p.fixture".into(),
+            storefront: "pl".into(),
+            title: "Fixture".into(),
+            can_edit: true,
+        },
+        action: ContextAction::PlayFromPosition {
+            source_index: 20,
+            shuffle: false,
+        },
+    })
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            let event = e.album_events.recv().await.unwrap();
+            let done = matches!(event, operations::AlbumEvent::Done(..));
+            e.album_event(event).await;
+            if done {
+                break;
+            }
+        }
+        let done = e.disk_events.recv().await.unwrap();
+        e.disk_complete(done).await;
+    })
+    .await
+    .unwrap();
+    assert_eq!(e.queue.tracks.len(), 450);
+    assert_eq!(e.queue.current, Some(20));
+    assert_eq!(driver.starts().len(), 1);
+    let requests = tokio::time::timeout(Duration::from_secs(2), http)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(requests.len(), 19, "18 pages and one storefront");
+    for (page, request) in requests.iter().skip(1).enumerate() {
+        let offset = page * 25;
+        assert!(request.contains(&format!("offset={offset}&")), "{request}");
+    }
+}

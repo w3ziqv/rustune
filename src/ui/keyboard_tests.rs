@@ -832,3 +832,90 @@ fn account_change_discards_private_navigation_and_rejects_old_first_page() {
     assert!(app.items.is_empty());
     assert!(app.next.is_none() && app.browse_retry.is_none());
 }
+
+#[test]
+fn oversized_playlist_stops_loading_and_history_shares_its_budget() {
+    let mut app = App::new(Config::default());
+    app.screen = Screen::Playlists;
+    app.kind = "open:library-playlists:p.old".into();
+    app.account_generation = Some(42);
+    app.playlist_bytes = crate::catalog::album::MAX_ALBUM_BYTES - 10;
+    app.items.push(Track {
+        id: "1".into(),
+        ..Track::default()
+    });
+    app.next = Some("music:pl:000000000000002a:25".into());
+    let next = press(&mut app, KeyCode::PageDown).unwrap();
+    app.accept(&next, serde_json::json!({
+        "account_generation":42, "items":[{"id":"2","kind":"library-songs"}], "next":"music:pl:000000000000002a:50"
+    })).unwrap();
+    assert_eq!(app.items.len(), 1);
+    assert!(app.note.contains("viewing limit"));
+    assert!(app.next.is_none() && app.browse_retry.is_none());
+    assert!(press(&mut app, KeyCode::PageDown).is_none());
+    assert!(press(&mut app, KeyCode::Char('R')).is_none());
+
+    app.remember_view();
+    assert!(app.items.is_empty());
+    app.kind = "open:library-playlists:p.new".into();
+    let fresh = app.page_request();
+    app.accept(
+        &fresh,
+        serde_json::json!({
+            "account_generation":42, "items":[{"id":"42","kind":"library-songs"}], "next":null
+        }),
+    )
+    .unwrap();
+    assert_eq!(app.items[0].id, "42");
+    assert!(
+        app.back_stack.is_empty(),
+        "the prior 12 MiB view would exceed the shared budget"
+    );
+}
+
+#[test]
+fn local_rotation_clears_private_rows_before_drawing_or_accepting_an_action() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::catalog::playlist_tests::paths(directory.path());
+    let mut app = App::new(Config::default());
+    app.account_generation = auth::token_stamp(&paths).map(auth::TokenStamp::generation);
+    for revoke_before_action in [false, true] {
+        let first = app.go(Screen::Playlists).unwrap();
+        app.accept(&first, serde_json::json!({
+            "account_generation":app.account_generation, "storefront":"pl", "next":null,
+            "items":[{"id":"p.private","title":"Previous account's playlist","kind":"library-playlists","can_edit":true}]
+        })).unwrap();
+        let token = auth::SecretToken::parse(if revoke_before_action {
+            "third-fixture"
+        } else {
+            "second-fixture"
+        })
+        .unwrap();
+        auth::save_user_token(&paths, &token).unwrap();
+        let lock = app.private_view_guard(&paths);
+        if revoke_before_action {
+            assert!(press(&mut app, KeyCode::Enter).is_none());
+            assert!(press(&mut app, KeyCode::Char('a')).is_none());
+        } else {
+            let backend = ratatui::backend::TestBackend::new(120, 40);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal.draw(|frame| app.render(frame)).unwrap();
+            let screen: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect();
+            assert!(!screen.contains("Previous account's playlist"));
+        }
+        assert!(app.items.is_empty());
+        assert_eq!(
+            app.back_stack.len(),
+            1,
+            "the public Search history remains available"
+        );
+        drop(lock);
+        app.account_generation = auth::token_stamp(&paths).map(auth::TokenStamp::generation);
+    }
+}

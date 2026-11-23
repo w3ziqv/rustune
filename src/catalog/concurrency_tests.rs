@@ -280,3 +280,38 @@ async fn late_negative_storefront_cannot_overwrite_the_new_account_region() {
     reply(page, "200 OK", json!({"data":[]})).await;
     assert!(playlists.await.unwrap().is_ok());
 }
+
+#[tokio::test]
+async fn last_private_page_clamps_size_and_has_no_invalid_next_cursor() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = playlist_tests::paths(dir.path());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let catalog =
+        Catalog::with_music_origin(paths, format!("http://{}", listener.local_addr().unwrap()));
+    let cursor = playlist::page_cursor("pl", catalog.account_generation().unwrap(), 9999);
+    let browse = tokio::spawn(async move {
+        catalog
+            .browse(
+                "library",
+                "",
+                Some(&cursor),
+                "pl",
+                PerformanceMode::Balanced.limits(),
+            )
+            .await
+            .unwrap()
+    });
+    let (region, _) = incoming(&listener).await;
+    reply(region, "200 OK", json!({"data":[{"id":"pl"}]})).await;
+    let (body, request) = incoming(&listener).await;
+    assert!(request.contains("limit=1&offset=9999"));
+    reply(
+        body,
+        "200 OK",
+        json!({"data":[], "next":"upstream-has-more"}),
+    )
+    .await;
+    let page = browse.await.unwrap();
+    assert!(page.next.is_none());
+    assert!(page.truncated);
+}

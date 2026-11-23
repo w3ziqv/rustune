@@ -9,6 +9,8 @@ use crate::{
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PlaylistWriteStatus {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_generation: Option<u64>,
     pub phase: String,
     pub tracks: usize,
     pub result: Option<PlaylistWriteResult>,
@@ -83,6 +85,10 @@ impl Engine {
             && self.playlist_write_task.is_some()
         {
             ensure!(
+                last.account_generation == self.catalog.account_generation(),
+                "Account credentials changed; wait for the previous playlist operation"
+            );
+            ensure!(
                 self.playlist_write_retry.as_ref().is_some_and(
                     |r| serde_json::to_string(r).ok() == serde_json::to_string(&request).ok()
                 ),
@@ -94,7 +100,15 @@ impl Engine {
             self.playlist_write_task.is_none(),
             "Another account write is in progress"
         );
-        let account = self.catalog.playlist_account()?;
+        let (account, generation) = {
+            let _publication = self.catalog.private_publication()?;
+            let account = self.catalog.playlist_account()?;
+            let generation = self
+                .catalog
+                .account_generation()
+                .context("No current Apple Music account")?;
+            (account, generation)
+        };
         let fingerprint = serde_json::to_string(&request)?;
         let ids = self.export_ids(source).map_err(|e| e.to_string());
         let paths = self.paths.clone();
@@ -104,13 +118,16 @@ impl Engine {
         let key = key.clone();
         self.playlist_write_status = Some(PlaylistWriteStatus {
             id: key.clone(),
+            account_generation: Some(generation),
             phase: "preparing".into(),
             message: "Preparing account write; queue/audio unchanged".into(),
             ..PlaylistWriteStatus::default()
         });
         self.playlist_write_retry = Some(request);
         self.playlist_write_task = Some(tokio::spawn(async move {
-            let status = run_write(paths, catalog, key, action, ids, account, fingerprint).await;
+            let mut status =
+                run_write(paths, catalog, key, action, ids, account, fingerprint).await;
+            status.account_generation = Some(generation);
             let _ = tx.send(status).await;
         }));
         Ok(())
@@ -161,6 +178,7 @@ async fn run_write(
     if let Some(result) = replay {
         return PlaylistWriteStatus {
             id: key,
+            account_generation: None,
             phase: "completed".into(),
             tracks: result.tracks,
             result: Some(result),
@@ -189,10 +207,11 @@ async fn run_write(
     })
     .await;
     if !matches!(saved, Ok(Ok(()))) {
-        return PlaylistWriteStatus{id:key,phase:"uncertain".into(),tracks:result.as_ref().map_or(0,|r|r.tracks),result,message:"Could not durably record playlist result; inspect Apple Music before a new operation. This key will not be sent again automatically".into(),can_retry:false};
+        return PlaylistWriteStatus{id:key,account_generation:None,phase:"uncertain".into(),tracks:result.as_ref().map_or(0,|r|r.tracks),result,message:"Could not durably record playlist result; inspect Apple Music before a new operation. This key will not be sent again automatically".into(),can_retry:false};
     }
     PlaylistWriteStatus {
         id: key,
+        account_generation: None,
         phase: if result.is_some() {
             "completed"
         } else if uncertain {

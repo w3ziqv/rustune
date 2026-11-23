@@ -235,7 +235,11 @@ async fn main() -> Result<()> {
                     Commands::Playlist { command } => {
                         let status: Status =
                             serde_json::from_value(ipc::request(&paths, &Request::Status).await?)?;
-                        command.request(status.queue_revision, &config.catalog_country)?
+                        command.request(
+                            status.queue_revision,
+                            &config.catalog_country,
+                            status.account_generation,
+                        )?
                     }
                     Commands::Queue {
                         action,
@@ -504,7 +508,7 @@ mod playlist_cli_tests {
             let Some(Commands::Playlist { command }) = cli.command else {
                 panic!("playlist command")
             };
-            command.request(42, "PL").unwrap()
+            command.request(42, "PL", Some(42)).unwrap()
         };
         assert!(matches!(
             parse(&["rustune", "playlist", "create", "Synthetic"]),

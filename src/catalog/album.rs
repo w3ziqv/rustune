@@ -97,13 +97,24 @@ impl Catalog {
                 "Album/playlist page limit reached; nothing committed"
             );
             let page = self
-                .browse(kind, "", next.as_deref(), &context.storefront, limits)
+                .browse_with_playlist_pages(
+                    kind,
+                    "",
+                    next.as_deref(),
+                    &context.storefront,
+                    limits,
+                    true,
+                )
                 .await?;
             ensure!(
                 page.storefront
                     .as_deref()
                     .is_some_and(|r| r.eq_ignore_ascii_case(&context.storefront)),
                 "Catalog storefront changed; reopen the album or playlist"
+            );
+            ensure!(
+                !page.truncated,
+                "Album/playlist exceeds the catalog result limit; nothing committed"
             );
             if let Some(total) = page.total {
                 ensure!(

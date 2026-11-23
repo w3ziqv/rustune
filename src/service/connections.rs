@@ -95,6 +95,31 @@ async fn respond_private(
         Err(error) => respond(socket, Reply::result(Err(error))).await,
     }
 }
+// Status snapshots may wait in the watch channel or the engine's reply queue.
+async fn respond_status(
+    socket: &mut UnixStream,
+    catalog: &Catalog,
+    mut reply: Reply,
+) -> Result<()> {
+    if reply
+        .data
+        .get("playlist_write")
+        .is_some_and(serde_json::Value::is_object)
+    {
+        let generation = reply.data["playlist_write"]["account_generation"].as_u64();
+        let payload = serde_json::to_vec(&reply)?;
+        if let Ok(_lock) = catalog.private_publication()
+            && generation.is_some()
+            && catalog.account_generation() == generation
+            && reply.data["account_generation"].as_u64() == generation
+        {
+            return timeout(WRITE_TIMEOUT, write_payload(socket, &payload)).await?;
+        }
+        reply.data["playlist_write"] = serde_json::Value::Null;
+        reply.data["account_generation"] = serde_json::to_value(catalog.account_generation())?;
+    }
+    respond(socket, reply).await
+}
 impl Clients {
     async fn handle(
         mut self,
@@ -127,8 +152,9 @@ impl Clients {
                 let _registration = ClientRegistration::new(self.registry, pid);
                 loop {
                     let status = self.updates.borrow_and_update().clone();
-                    respond(
+                    respond_status(
                         &mut socket,
+                        &self.catalog,
                         Reply::result(Ok(serde_json::to_value(status)?)),
                     )
                     .await?;
@@ -174,7 +200,7 @@ impl Clients {
             }
             other => send(&self.tx, other).await,
         };
-        respond(&mut socket, Reply::result(result)).await
+        respond_status(&mut socket, &self.catalog, Reply::result(result)).await
     }
 }
 
@@ -244,5 +270,46 @@ mod tests {
                 .to_string()
                 .contains("credentials changed")
         );
+    }
+
+    #[tokio::test]
+    async fn delayed_status_and_subscription_snapshot_hide_a_previous_accounts_write() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = crate::catalog::playlist_tests::paths(directory.path());
+        let catalog = Catalog::new(&paths).unwrap();
+        let old = catalog.account_generation();
+        let snapshot = serde_json::json!({
+            "account_generation":old,
+            "playlist_write":{
+                "account_generation":old,
+                "phase":"completed",
+                "result":{"playlist_id":"p.from-old-account","tracks":2}
+            }
+        });
+        let catalog = &catalog;
+        let publish = |data| async move {
+            let (mut socket, mut peer) = UnixStream::pair().unwrap();
+            respond_status(&mut socket, catalog, Reply::result(Ok(data)))
+                .await
+                .unwrap();
+            let body = crate::ipc::read_frame(&mut peer).await.unwrap();
+            serde_json::from_slice::<Reply>(&body)
+                .unwrap()
+                .value()
+                .unwrap()
+        };
+        assert_eq!(
+            publish(snapshot.clone()).await["playlist_write"]["result"]["tracks"],
+            2
+        );
+        crate::auth::save_user_token(&paths, &crate::auth::SecretToken::parse("next").unwrap())
+            .unwrap();
+        let safe = publish(snapshot).await;
+        assert!(safe["playlist_write"].is_null());
+        assert_eq!(
+            safe["account_generation"].as_u64(),
+            catalog.account_generation()
+        );
+        assert!(!safe.to_string().contains("p.from-old-account"));
     }
 }

@@ -1,7 +1,10 @@
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use rustune::{
-    catalog::{playlist::PlaylistRef, playlist_write::WriteAction},
+    catalog::{
+        playlist::{PlaylistRef, page_cursor},
+        playlist_write::WriteAction,
+    },
     ipc::{self, ContextAction, PlaylistWriteSource, Request},
 };
 #[derive(Args)]
@@ -75,7 +78,16 @@ pub enum PlaylistCommand {
     Retry,
 }
 impl PlaylistCommand {
-    pub fn request(self, revision: u64, country: &str) -> Result<Request> {
+    pub fn request(self, revision: u64, country: &str, generation: Option<u64>) -> Result<Request> {
+        let cursor = |storefront: Option<String>, offset| {
+            let generation = generation
+                .ok_or_else(|| anyhow::anyhow!("Personal library requires a Music User Token"))?;
+            Ok::<_, anyhow::Error>(page_cursor(
+                storefront.as_deref().unwrap_or(country),
+                generation,
+                offset,
+            ))
+        };
         let reference = |id, storefront| PlaylistRef {
             id,
             storefront,
@@ -111,13 +123,10 @@ impl PlaylistCommand {
             Self::List { offset, storefront } => Request::Browse {
                 kind: "playlists".into(),
                 term: String::new(),
-                next: if offset == 0 {
+                next: if offset == 0 && storefront.is_none() {
                     None
                 } else {
-                    Some(format!(
-                        "music:{}:{offset}",
-                        storefront.unwrap_or_else(|| country.to_ascii_lowercase())
-                    ))
+                    Some(cursor(storefront, offset)?)
                 },
             },
             Self::Tracks {
@@ -132,10 +141,7 @@ impl PlaylistCommand {
                 Request::Browse {
                     kind: format!("open:library-playlists:{id}"),
                     term: String::new(),
-                    next: Some(format!(
-                        "music:{}:{offset}",
-                        storefront.unwrap_or_else(|| country.to_ascii_lowercase())
-                    )),
+                    next: Some(cursor(storefront, offset)?),
                 }
             }
             Self::Play {
@@ -200,5 +206,42 @@ impl PlaylistCommand {
             }
             Self::Retry => Request::RetryPlaylistWrite,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn browse(args: &[&str]) -> (String, Option<String>) {
+        let cli = crate::Cli::try_parse_from(
+            ["rustune", "playlist"]
+                .into_iter()
+                .chain(args.iter().copied()),
+        )
+        .unwrap();
+        let Some(crate::Commands::Playlist { command }) = cli.command else {
+            panic!("expected playlist subcommand");
+        };
+        let Request::Browse { kind, next, .. } = command.request(7, "PL", Some(42)).unwrap() else {
+            panic!("expected Browse");
+        };
+        (kind, next)
+    }
+
+    #[test]
+    fn tracks_pins_even_the_first_page_to_the_current_account() {
+        let (kind, cursor) = browse(&["tracks", "p.fixture"]);
+        assert_eq!(kind, "open:library-playlists:p.fixture");
+        assert_eq!(cursor.as_deref(), Some("music:pl:000000000000002a:0"));
+    }
+
+    #[test]
+    fn list_offset_uses_current_generation_and_selected_storefront() {
+        let (kind, cursor) = browse(&["list", "--offset", "25", "--storefront", "DE"]);
+        assert_eq!(kind, "playlists");
+        assert_eq!(cursor.as_deref(), Some("music:de:000000000000002a:25"));
+        assert_eq!(browse(&["list"]).1, None);
     }
 }

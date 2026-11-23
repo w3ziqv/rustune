@@ -15,6 +15,7 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     io::{self, IsTerminal, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
+    time::{Duration, Instant},
 };
 use zeroize::Zeroizing;
 const MAX_TOKEN: usize = 16 * 1024;
@@ -52,13 +53,21 @@ fn token_lock(paths: &Paths, mode: FlockArg) -> Result<Flock<File>> {
             && metadata.uid() == nix::unistd::Uid::current().as_raw(),
         "Invalid private token lock"
     );
-    Flock::lock(file, mode).map_err(|(_, error)| {
-        if error == nix::errno::Errno::EWOULDBLOCK {
-            anyhow!("Account credentials are changing; retry")
-        } else {
-            anyhow!("Could not lock the private token file")
+    let mut file = file;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match Flock::lock(file, mode) {
+            Ok(lock) => return Ok(lock),
+            Err((retry, nix::errno::Errno::EWOULDBLOCK)) => {
+                if mode != FlockArg::LockExclusiveNonblock || Instant::now() >= deadline {
+                    return Err(anyhow!("Account credentials are busy; retry"));
+                }
+                file = retry;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => return Err(anyhow!("Could not lock the private token file")),
         }
-    })
+    }
 }
 
 pub(crate) fn token_publication(paths: &Paths) -> Result<Flock<File>> {
@@ -99,7 +108,7 @@ pub(crate) fn token_stamp(paths: &Paths) -> Option<TokenStamp> {
 
 pub fn save_user_token(paths: &Paths, token: &SecretToken) -> Result<()> {
     private_dir(&paths.config)?;
-    let _lock = token_lock(paths, FlockArg::LockExclusive)?;
+    let _lock = token_lock(paths, FlockArg::LockExclusiveNonblock)?;
     private_write(&paths.config.join("music-user-token"), token.0.as_bytes())
 }
 pub fn has_user_token(paths: &Paths) -> bool {
@@ -117,7 +126,7 @@ pub fn remove_user_token(paths: &Paths) -> Result<()> {
     {
         return Ok(());
     }
-    let _lock = token_lock(paths, FlockArg::LockExclusive)?;
+    let _lock = token_lock(paths, FlockArg::LockExclusiveNonblock)?;
     let file = paths.config.join("music-user-token");
     match std::fs::symlink_metadata(&file) {
         Ok(m) => {

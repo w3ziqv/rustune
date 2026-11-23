@@ -61,6 +61,31 @@ impl SongActions {
     }
 }
 impl App {
+    pub(super) fn private_views_present(&self) -> bool {
+        crate::catalog::playlist::private_kind(&self.kind)
+            || self.playlist_dialog.is_some()
+            || self
+                .inspected_track
+                .as_ref()
+                .is_some_and(|track| track.kind == "library-songs")
+            || self.back_stack.iter().any(BrowseView::private)
+    }
+
+    pub(super) fn trim_playlist_history(&mut self, current: usize) {
+        let allowance = crate::catalog::album::MAX_ALBUM_BYTES.saturating_sub(current);
+        let mut stored: usize = self.back_stack.iter().map(|view| view.playlist_bytes).sum();
+        while stored > allowance {
+            let Some(index) = self
+                .back_stack
+                .iter()
+                .position(|view| view.playlist_bytes != 0)
+            else {
+                break;
+            };
+            stored -= self.back_stack.remove(index).playlist_bytes;
+        }
+    }
+
     pub(super) fn invalidate_private_views(&mut self) {
         self.back_stack.retain(|view| !view.private());
         self.playlist_dialog = None;
@@ -118,13 +143,18 @@ impl App {
             catalog_context: self.catalog_context.clone(),
             kind: self.kind.clone(),
             query: self.query.clone(),
-            items: self.items.clone(),
+            items: if self.screen == Screen::Queue {
+                Vec::new()
+            } else {
+                std::mem::take(&mut self.items)
+            },
             next: self.next.clone(),
             previous: self.previous.clone(),
             selected: self.selected,
             queue_offset: self.queue_offset,
             catalog_offset: self.catalog_offset,
         });
+        self.playlist_bytes = 0;
     }
     pub(super) fn restore_view(&mut self) -> bool {
         let Some(view) = self.back_stack.pop() else {

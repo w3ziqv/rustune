@@ -242,7 +242,6 @@ async fn playlist_ui_ipc_full_context_private_save_and_every_eof() {
         (200, Some(region.clone())),
         (200, Some(list)),
         (200, Some(page(0))),
-        (200, Some(page(0))),
         (200, Some(page(25))),
         (200, Some(region)),
         (
@@ -331,7 +330,12 @@ async fn playlist_ui_ipc_full_context_private_save_and_every_eof() {
             .count(),
         1
     );
-    let exported = &requests[6]["body"]["relationships"]["tracks"]["data"];
+    assert_eq!(
+        requests.len(),
+        6,
+        "opening the playlist supplies its first page to playback preparation"
+    );
+    let exported = &requests.last().unwrap()["body"]["relationships"]["tracks"]["data"];
     assert_eq!(exported.as_array().unwrap().len(), 45);
     assert_eq!(exported[25]["id"], exported[26]["id"]);
     for index in 0..45 {

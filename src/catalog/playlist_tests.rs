@@ -183,5 +183,12 @@ async fn account_replacement_between_playlist_pages_rejects_whole_context() {
         result.is_err(),
         "Mixed credential generations must not become one queue"
     );
-    assert_eq!(http.await.unwrap().len(), 2);
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), http)
+            .await
+            .unwrap()
+            .unwrap()
+            .len(),
+        2
+    );
 }

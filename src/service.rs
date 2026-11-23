@@ -354,6 +354,7 @@ impl Engine {
         })
     }
     fn status(&self) -> Status {
+        let account_generation = self.catalog.account_generation();
         Status {
             helper_protocol: Some(rustune_core::protocol::PROTOCOL_VERSION),
             client_pids: self
@@ -387,14 +388,20 @@ impl Engine {
             operation: self.operation.clone(),
             audio_error: self.audio_error.clone(),
             config_error: self.config_results.borrow().clone(),
-            playlist_write: self.playlist_write_status.clone(),
+            playlist_write: self
+                .playlist_write_status
+                .as_ref()
+                .filter(|write| {
+                    account_generation.is_some() && write.account_generation == account_generation
+                })
+                .cloned(),
             undo_available: self.undo.is_some(),
             recovery_required: self.recovery_required,
             repeat: self.queue.repeat,
             shuffle: self.queue.shuffle,
             profile: self.config.performance,
             catalog_country: self.config.catalog_country.clone(),
-            account_generation: self.catalog.account_generation(),
+            account_generation,
             pid: std::process::id(),
             browser_pid: None,
             audio_pid: self.audio.as_ref().and_then(|a| a.pid()),
@@ -501,7 +508,8 @@ impl Engine {
                 ensure!(
                     self.playlist_write_status
                         .as_ref()
-                        .is_some_and(|s| s.can_retry),
+                        .is_some_and(|s| s.can_retry
+                            && s.account_generation == self.catalog.account_generation()),
                     "Playlist outcome needs review or is already confirmed; automatic retry is disabled"
                 );
                 let request = self

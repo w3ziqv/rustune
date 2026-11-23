@@ -63,6 +63,13 @@ impl Catalog {
         Ok(prepared)
     }
 }
+pub fn page_cursor(storefront: &str, generation: u64, offset: usize) -> String {
+    format!(
+        "music:{}:{generation:016x}:{offset}",
+        storefront.to_ascii_lowercase()
+    )
+}
+
 pub(crate) fn private_kind(kind: &str) -> bool {
     matches!(
         kind,

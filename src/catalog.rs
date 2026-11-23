@@ -134,6 +134,19 @@ impl Catalog {
         country: &str,
         limits: Limits,
     ) -> Result<Page> {
+        self.browse_with_playlist_pages(kind, term, next, country, limits, false)
+            .await
+    }
+
+    async fn browse_with_playlist_pages(
+        &self,
+        kind: &str,
+        term: &str,
+        next: Option<&str>,
+        country: &str,
+        limits: Limits,
+        reuse_playlist: bool,
+    ) -> Result<Page> {
         let Some(apple) = &self.apple else {
             if let Some(cursor) = next.filter(|c| c.contains(':')) {
                 let (provider, region, generation, offset) = parse_cursor(cursor)?;
@@ -163,7 +176,14 @@ impl Catalog {
                         None => format!("{region}:{offset}"),
                     };
                     let page = apple
-                        .browse(kind, term, Some(&cursor), region, limits)
+                        .browse_with_playlist_pages(
+                            kind,
+                            term,
+                            Some(&cursor),
+                            region,
+                            limits,
+                            reuse_playlist,
+                        )
                         .await?;
                     pin_page(page, "music")
                 }
@@ -178,7 +198,9 @@ impl Catalog {
                 )),
             };
         }
-        let result = apple.browse(kind, term, None, country, limits).await;
+        let result = apple
+            .browse_with_playlist_pages(kind, term, None, country, limits, reuse_playlist)
+            .await;
         match result {
             Ok(page) => pin_page(page, "music"),
             Err(error) if private => Err(error),
@@ -416,6 +438,7 @@ impl Catalog {
             previous: (offset > 0).then(|| offset.saturating_sub(size).to_string()),
             storefront: Some(country.to_ascii_lowercase()),
             account_generation: None,
+            truncated: false,
         };
         let mut state = self.state.lock().expect("iTunes state");
         let capacity = self.capacity.load(Ordering::Relaxed);
