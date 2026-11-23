@@ -252,7 +252,7 @@ async fn late_negative_storefront_cannot_overwrite_the_new_account_region() {
     };
     let old = browse("library");
     let (old_region, request) = incoming(&listener).await;
-    assert!(request.starts_with("GET /v1/me/storefront "));
+    assert!(request.starts_with("GET /v1/me/storefront"));
     crate::auth::save_user_token(
         &paths,
         &crate::auth::SecretToken::parse("new-account").unwrap(),
@@ -260,7 +260,7 @@ async fn late_negative_storefront_cannot_overwrite_the_new_account_region() {
     .unwrap();
     let fresh = browse("library");
     let (new_region, request) = incoming(&listener).await;
-    assert!(request.starts_with("GET /v1/me/storefront "));
+    assert!(request.starts_with("GET /v1/me/storefront"));
     reply(new_region, "200 OK", json!({"data":[{"id":"pl"}]})).await;
     let (page, _) = incoming(&listener).await;
     reply(page, "200 OK", json!({"data":[]})).await;
