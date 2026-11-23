@@ -1,6 +1,8 @@
 //! Apple Music catalog/account search with bounded anonymous iTunes fallback.
 pub mod album;
 mod apple;
+#[cfg(test)]
+mod concurrency_tests;
 pub mod playlist;
 #[cfg(test)]
 pub(crate) mod playlist_tests;
@@ -87,8 +89,22 @@ impl Catalog {
     pub(crate) fn with_origin(origin: &str) -> Self {
         Self::create(origin).unwrap()
     }
+    #[cfg(test)]
+    pub(crate) fn with_music_origin(paths: crate::config::Paths, origin: String) -> Self {
+        let mut catalog = Self::with_origin("http://127.0.0.1:1");
+        catalog.apple = Some(apple::AppleCatalog::with_origin(paths, origin).unwrap());
+        catalog
+    }
+
     pub(crate) fn account_generation(&self) -> Option<u64> {
         self.apple.as_ref()?.account_generation()
+    }
+
+    pub(crate) fn private_publication(&self) -> Result<nix::fcntl::Flock<std::fs::File>> {
+        self.apple
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Apple Music unavailable"))?
+            .publication_lock()
     }
 
     pub fn cache_entries(&self) -> usize {
@@ -399,6 +415,7 @@ impl Catalog {
             next: more.then(|| (offset + size).to_string()),
             previous: (offset > 0).then(|| offset.saturating_sub(size).to_string()),
             storefront: Some(country.to_ascii_lowercase()),
+            account_generation: None,
         };
         let mut state = self.state.lock().expect("iTunes state");
         let capacity = self.capacity.load(Ordering::Relaxed);

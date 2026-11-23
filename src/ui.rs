@@ -132,6 +132,8 @@ pub struct App {
     album_view: Option<crate::catalog::album::AlbumRef>,
     playlist_view: Option<crate::catalog::playlist::PlaylistRef>,
     playlist_top: usize,
+    playlist_bytes: usize,
+    account_generation: Option<u64>,
     playlist_dialog: Option<playlists::PlaylistDialog>,
     playlist_target: Option<ipc::PlaylistWriteSource>,
     queue_rows: Vec<crate::queue::QueueEntry>,
@@ -217,6 +219,8 @@ impl App {
             album_view: None,
             playlist_view: None,
             playlist_top: 0,
+            playlist_bytes: 0,
+            account_generation: None,
             playlist_dialog: None,
             playlist_target: None,
             queue_rows: Vec::new(),
@@ -329,6 +333,11 @@ impl App {
         self.lyrics_result = Some(result);
     }
     fn on_status(&mut self, status: Status) -> Option<Request> {
+        let account_changed = self.account_generation != status.account_generation;
+        if account_changed {
+            self.account_generation = status.account_generation;
+            self.invalidate_private_views();
+        }
         if !self.connected {
             self.connected = true;
             self.note = "Connected to service".into();
@@ -372,7 +381,9 @@ impl App {
             self.note = format!("Playlist write {}: {}", write.phase, write.message);
         }
         self.status = Some(status);
-        (self.screen == Screen::Queue && changed).then(|| self.page_request())
+        (self.screen == Screen::Queue && changed
+            || account_changed && matches!(self.screen, Screen::Library | Screen::Playlists))
+        .then(|| self.page_request())
     }
     fn displayed_track(&self) -> Option<&Track> {
         if self.screen == Screen::Lyrics {
@@ -971,6 +982,7 @@ impl App {
                         self.remember_view();
                         self.catalog_offset = 0;
                         self.playlist_top = 0;
+                        self.playlist_bytes = 0;
                         self.playlist_view = self.selected_playlist();
                         self.album_view = self.selected_album();
                         self.kind = format!("open:{}:{}", track.kind, track.id);
@@ -1185,11 +1197,36 @@ impl App {
                 if append && next != &self.next {
                     return Ok(());
                 }
+                let p: Page = serde_json::from_value(value)?;
+                if crate::catalog::playlist::private_kind(kind) {
+                    anyhow::ensure!(
+                        p.account_generation.is_some()
+                            && p.account_generation == self.account_generation,
+                        "Account credentials changed; reopen the library"
+                    );
+                }
+                if let Some(playlist) = &self.playlist_view
+                    && p.storefront
+                        .as_deref()
+                        .is_some_and(|region| !region.eq_ignore_ascii_case(&playlist.storefront))
+                {
+                    anyhow::bail!("Account region changed; reopen the playlist list");
+                }
+                if self.playlist_tracks() {
+                    let bytes = if append { self.playlist_bytes } else { 0 };
+                    let bytes = bytes + serde_json::to_vec(&p.items)?.len();
+                    let count = if append { self.items.len() } else { 0 } + p.items.len();
+                    anyhow::ensure!(
+                        bytes <= crate::catalog::album::MAX_ALBUM_BYTES
+                            && count <= crate::queue::MAX_QUEUE,
+                        "Playlist exceeds the local viewing limit"
+                    );
+                    self.playlist_bytes = bytes;
+                }
                 self.catalog_offset = next
                     .as_deref()
                     .and_then(|n| n.rsplit(':').next()?.parse().ok())
                     .unwrap_or(0);
-                let p: Page = serde_json::from_value(value)?;
                 self.browse_state = BrowseState::Ready;
                 self.browse_retry = None;
                 self.catalog_context = p.context.unwrap_or_else(|| "Apple/iTunes catalog".into());
@@ -1793,9 +1830,10 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
     );
     let mut app = App::new(config.clone());
     app.token_stored = auth::has_user_token(&paths);
-    app.status = Some(serde_json::from_value(
-        ipc::request(&paths, &Request::Status).await?,
-    )?);
+    let initial_status: Status =
+        serde_json::from_value(ipc::request(&paths, &Request::Status).await?)?;
+    app.account_generation = initial_status.account_generation;
+    app.status = Some(initial_status);
     let (jobs, work) = mpsc::channel::<Request>(8);
     let (done, mut responses) = mpsc::channel(8);
     let worker_paths = paths.clone();
@@ -1873,6 +1911,10 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                     match result {
                         Some(saved) => {
                             app.token_stored = saved;
+                            let generation = auth::token_stamp(&paths).map(auth::TokenStamp::generation);
+                            if app.account_generation != generation {
+                                app.invalidate_private_views();
+                            }
                             app.refresh_diagnostics();
                             app.note = if saved { auth::SAVED_MESSAGE.into() } else {
                                 "Local token removed; Apple account authorization unchanged.".into()
@@ -1908,8 +1950,29 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                 Some((r,result))=responses.recv()=>{
                     dirty=true;
                     app.busy=false;
-                    if let Request::Browse {kind,term,..}=&r && (kind!=&app.kind || term!=&app.query || !matches!(app.screen, Screen::Search | Screen::Library | Screen::Playlists)) {continue;}
+                    if let Request::Browse { kind, term, next } = &r
+                        && (!matches!(app.screen, Screen::Search | Screen::Library | Screen::Playlists)
+                            || kind != &app.kind || term != &app.query
+                            || !matches!(&app.browse_retry, Some(Request::Browse {next: pending, ..}) if pending == next))
+                    { continue; }
                     if let Request::QueuePage {offset}=&r && (app.screen!=Screen::Queue || *offset!=app.queue_offset) {continue;}
+                    let _publication = if result.is_ok()
+                        && matches!(&r, Request::Browse { kind, .. } if crate::catalog::playlist::private_kind(kind))
+                    {
+                        let Ok(lock) = auth::token_publication(&paths) else {
+                            app.request_failed(&r);
+                            app.note = "Account credentials are changing; R retry".into();
+                            continue;
+                        };
+                        let current = auth::token_stamp(&paths).map(auth::TokenStamp::generation);
+                        if app.account_generation != current {
+                            app.invalidate_private_views();
+                            continue;
+                        }
+                        Some(lock)
+                    } else {
+                        None
+                    };
                     match result {Ok(v)=>{
                     if let Err(e)=app.accept(&r,v) {
                         app.request_failed(&r);
@@ -1917,12 +1980,19 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                     } else if matches!(r, Request::Browse { .. }) && let Some(prefetch) = app.playlist_page(false) {
                         app.dispatch(&jobs, prefetch);
                     }
-                    if app.screen==Screen::Queue && !matches!(r,Request::QueuePage{..}){let _=jobs.try_send(app.page_request());}},Err(e)=>{app.request_failed(&r);app.note=e.to_string();}}
+                    if app.screen==Screen::Queue && !matches!(r,Request::QueuePage{..}){let _=jobs.try_send(app.page_request());}},Err(e)=>{
+                        app.request_failed(&r);
+                        app.note = if matches!(r, Request::Browse { .. }) {
+                            format!("{e} · R retry")
+                        } else {
+                            e.to_string()
+                        };
+                    }}
 
                 }
                 Some(update) = status.recv() => match update {
                     Ok(s) => {
-                        dirty |= !app.connected || runtime::redraw_needed(app.status.as_ref(), &s, app.screen == Screen::Equalizer);
+                        dirty |= !app.connected || app.account_generation != s.account_generation || runtime::redraw_needed(app.status.as_ref(), &s, app.screen == Screen::Equalizer);
                         let reconnect = !app.connected;
                         if reconnect {
                             app.refresh_diagnostics();

@@ -4,7 +4,7 @@ use crate::catalog::playlist_write::{
 };
 impl AppleCatalog {
     pub(crate) fn credential_stamp(&self) -> Result<CredentialStamp> {
-        let s = stamp(&self.paths)
+        let s = token_stamp(&self.paths)
             .ok_or_else(|| anyhow!("A private Music User Token is required for playlist writes"))?;
         Ok(CredentialStamp {
             inode: s.inode,

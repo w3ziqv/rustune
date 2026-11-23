@@ -3,6 +3,7 @@ mod playlist_write;
 use super::reads::{Budget, Reads};
 use crate::{
     artwork,
+    auth::{TokenStamp, token_publication, token_stamp},
     cache::Cache,
     config::{Limits, Paths},
     model::{Page, Track},
@@ -16,8 +17,6 @@ use rustune_core::public_apple::{application_token, read_private_secret};
 use serde_json::Value;
 use std::{
     collections::HashSet,
-    fs,
-    os::unix::fs::MetadataExt,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -27,36 +26,13 @@ use std::{
 use tokio::sync::Semaphore;
 use zeroize::Zeroizing;
 const MAX_BODY: usize = 2 * 1024 * 1024;
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Stamp {
-    device: u64,
-    changed: (i64, i64),
-    inode: u64,
-    mtime: i64,
-    nanos: i64,
-    size: u64,
-}
-fn stamp(paths: &Paths) -> Option<Stamp> {
-    fs::symlink_metadata(paths.config.join("music-user-token"))
-        .ok()
-        .filter(|m| m.is_file())
-        .map(|m| Stamp {
-            device: m.dev(),
-            changed: (m.ctime(), m.ctime_nsec()),
-            inode: m.ino(),
-            mtime: m.mtime(),
-            nanos: m.mtime_nsec(),
-            size: m.len(),
-        })
-}
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct Account {
     generation: u64,
 }
 struct State {
     cache: Cache<String, Page>,
-    stamp: Option<Stamp>,
-    account: Account,
+    stamp: Option<TokenStamp>,
     region: Option<(Instant, Option<String>)>,
     budget: Budget,
 }
@@ -102,9 +78,6 @@ impl AppleCatalog {
             state: Arc::new(Mutex::new(State {
                 cache: Cache::new(8),
                 stamp: None,
-                account: Account {
-                    generation: fastrand::u64(..),
-                },
                 region: None,
                 budget: Budget::default(),
             })),
@@ -162,16 +135,40 @@ impl AppleCatalog {
         self.account().map(|account| account.generation)
     }
 
+    pub(super) fn publication_lock(&self) -> Result<nix::fcntl::Flock<std::fs::File>> {
+        token_publication(&self.paths)
+    }
+
     fn account(&self) -> Option<Account> {
-        let mut state = self.state.lock().expect("Apple catalog state");
-        let current = stamp(&self.paths);
+        self.refresh_account(&mut self.state.lock().expect("Apple catalog state"))
+    }
+
+    fn refresh_account(&self, state: &mut State) -> Option<Account> {
+        let current = token_stamp(&self.paths);
         if current != state.stamp {
             state.stamp = current;
-            state.account.generation = state.account.generation.wrapping_add(1);
             state.region = None;
-            self.clear_cache(&mut state);
+            self.clear_cache(state);
         }
-        current.map(|_| state.account)
+        current.map(|stamp| Account {
+            generation: stamp.generation(),
+        })
+    }
+
+    fn with_account<T>(
+        &self,
+        expected: Option<Account>,
+        action: impl FnOnce(&mut State) -> T,
+    ) -> Result<T> {
+        let _publication = expected.map(|_| self.publication_lock()).transpose()?;
+        let mut state = self.state.lock().expect("Apple catalog state");
+        if let Some(expected) = expected {
+            ensure!(
+                self.refresh_account(&mut state) == Some(expected),
+                "Account credentials changed; restart the library search"
+            );
+        }
+        Ok(action(&mut state))
     }
 
     fn clear_cache(&self, state: &mut State) {
@@ -194,12 +191,14 @@ impl AppleCatalog {
         let region = self
             .regions
             .read(account, async move {
-                catalog.check_account(Some(account))?;
-                if let Some((checked, region)) =
-                    &catalog.state.lock().expect("Apple catalog state").region
-                    && checked.elapsed() <= Duration::from_secs(300)
-                {
-                    return Ok(region.clone());
+                if let Some(region) = catalog.with_account(Some(account), |state| {
+                    state
+                        .region
+                        .as_ref()
+                        .filter(|(checked, _)| checked.elapsed() <= Duration::from_secs(300))
+                        .map(|(_, region)| region.clone())
+                })? {
+                    return Ok(region);
                 }
                 let response = catalog.get("me/storefront", &[], Some(account)).await;
                 let region = response.ok().and_then(|value| {
@@ -207,9 +206,9 @@ impl AppleCatalog {
                     (region.len() == 2 && region.bytes().all(|b| b.is_ascii_alphabetic()))
                         .then(|| region.to_ascii_lowercase())
                 });
-                catalog.check_account(Some(account))?;
-                catalog.state.lock().expect("Apple catalog state").region =
-                    Some((Instant::now(), region.clone()));
+                catalog.with_account(Some(account), |state| {
+                    state.region = Some((Instant::now(), region.clone()));
+                })?;
                 Ok(region)
             })
             .await?;
@@ -467,16 +466,11 @@ impl AppleCatalog {
         let kind = kind.as_str();
         let private = account.is_some();
         let mutable_playlist = kind == "playlists" || kind.starts_with("open:library-playlists:");
-        self.check_account(account)?;
         if !mutable_playlist
-            && let Some(page) = self
-                .state
-                .lock()
-                .expect("Apple catalog state")
-                .cache
-                .get(&key)
+            && let Some(page) =
+                self.with_account(account, |state| state.cache.get(&key).cloned())?
         {
-            return Ok(page.clone());
+            return Ok(page);
         }
         let mut params = vec![("limit", size.to_string()), ("offset", offset.to_string())];
         let (path, wanted, search) = match kind {
@@ -601,17 +595,18 @@ impl AppleCatalog {
                 && (!search || offset + size < max_results))
                 .then(|| cursor(offset + size)),
             context: None,
+            account_generation: account.map(|account| account.generation),
         };
-        self.check_account(account)?;
-        let mut state = self.state.lock().expect("Apple catalog state");
-        if state.cache.capacity != self.capacity.load(Ordering::Relaxed) {
-            self.clear_cache(&mut state);
-        }
-        if !mutable_playlist {
-            state.cache.insert(key, page.clone());
-            self.entries
-                .store(state.cache.entries.len(), Ordering::Relaxed);
-        }
+        self.with_account(account, |state| {
+            if state.cache.capacity != self.capacity.load(Ordering::Relaxed) {
+                self.clear_cache(state);
+            }
+            if !mutable_playlist {
+                state.cache.insert(key, page.clone());
+                self.entries
+                    .store(state.cache.entries.len(), Ordering::Relaxed);
+            }
+        })?;
         Ok(page)
     }
 }
@@ -660,9 +655,11 @@ pub(super) fn map_resource(value: &Value, wanted: &str) -> Option<Track> {
         .map(str::to_owned);
     let url = attributes["url"]
         .as_str()
+        .filter(|url| url.len() <= 2048)
         .and_then(|v| Url::parse(v).ok())
         .filter(|u| {
-            u.scheme() == "https"
+            u.as_str().len() <= 2048
+                && u.scheme() == "https"
                 && u.host_str() == Some("music.apple.com")
                 && u.username().is_empty()
                 && u.password().is_none()

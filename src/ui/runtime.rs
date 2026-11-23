@@ -191,6 +191,7 @@ pub(super) fn redraw_needed(old: Option<&Status>, new: &Status, equalizer: bool)
         || old.can_previous != new.can_previous
         || old.start_available != new.start_available
         || old.playback_available != new.playback_available
+        || old.account_generation != new.account_generation
         || old.profile != new.profile
         || old.repeat != new.repeat
         || old.shuffle != new.shuffle

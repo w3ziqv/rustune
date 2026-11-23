@@ -118,10 +118,13 @@ pub async fn write_frame<W: AsyncWrite + Unpin, T: Serialize>(
     writer: &mut W,
     value: &T,
 ) -> Result<()> {
-    let b = serde_json::to_vec(value)?;
+    write_payload(writer, &serde_json::to_vec(value)?).await
+}
+
+pub(crate) async fn write_payload<W: AsyncWrite + Unpin>(writer: &mut W, b: &[u8]) -> Result<()> {
     anyhow::ensure!(b.len() <= MAX_FRAME, "IPC frame exceeds size limit");
     writer.write_u32(b.len() as u32).await?;
-    writer.write_all(&b).await?;
+    writer.write_all(b).await?;
     Ok(())
 }
 

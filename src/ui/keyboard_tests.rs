@@ -189,6 +189,7 @@ fn assert_previous_catalog_page(screen: Screen) {
         ..Config::default()
     });
     app.screen = screen;
+    app.account_generation = Some(42);
     app.kind = if screen == Screen::Library {
         "library"
     } else {
@@ -202,7 +203,7 @@ fn assert_previous_catalog_page(screen: Screen) {
             term: app.query.clone(),
             next: Some("50".into()),
         },
-        serde_json::json!({"items":[], "next":"music:pl:75", "previous":"music:pl:25"}),
+        serde_json::json!({"items":[], "next":"music:pl:75", "previous":"music:pl:25", "account_generation":42}),
     )
     .unwrap();
     assert!(
@@ -326,9 +327,10 @@ fn album_retry_binding_preserves_lyrics_reload() {
 #[test]
 fn playlists_open_whole_context_and_queue_save_requires_name_and_confirmation() {
     let mut app = App::new(Config::default());
+    app.account_generation = Some(42);
     let request = app.go(Screen::Playlists).expect("Playlists loads metadata");
     assert!(matches!(request,Request::Browse{ref kind,..} if kind=="playlists"));
-    app.accept(&request,serde_json::json!({"items":[{"id":"p.fixture","kind":"library-playlists","title":"Fixture","provider":"music","storefront":"pl","can_edit":true}],"next":null,"storefront":"pl","context":"Library"})).unwrap();
+    app.accept(&request,serde_json::json!({"items":[{"id":"p.fixture","kind":"library-playlists","title":"Fixture","provider":"music","storefront":"pl","can_edit":true}],"next":null,"storefront":"pl","context":"Library","account_generation":42})).unwrap();
     let open = press(&mut app, KeyCode::Enter).unwrap();
     assert!(matches!(open, Request::Browse { next: None, .. }));
     assert!(app.playlist_view.is_some());
@@ -690,6 +692,7 @@ fn playlist_window_prefetches_and_preserves_duplicate_occurrences() {
     app.viewport = Size::new(120, 42);
     app.screen = Screen::Playlists;
     app.kind = "open:library-playlists:p.fixture".into();
+    app.account_generation = Some(42);
     app.playlist_view = Some(crate::catalog::playlist::PlaylistRef {
         id: "p.fixture".into(),
         storefront: "pl".into(),
@@ -707,7 +710,7 @@ fn playlist_window_prefetches_and_preserves_duplicate_occurrences() {
                 serde_json::json!({"id":id.to_string(),"kind":"library-songs","source_index":i})
             })
             .collect::<Vec<_>>();
-        serde_json::json!({"items":items,"next":next,"storefront":"pl"})
+        serde_json::json!({"items":items,"next":next,"storefront":"pl","account_generation":42})
     };
     let initial = app.page_request();
     app.accept(
@@ -789,4 +792,43 @@ fn playlist_window_prefetches_and_preserves_duplicate_occurrences() {
     assert_eq!(app.playlist_range(30), 0..25);
     app.accept(&initial, payload(0, 7, None)).unwrap();
     assert_eq!(app.playlist_range(30), 0..7);
+}
+
+#[test]
+fn account_change_discards_private_navigation_and_rejects_old_first_page() {
+    let mut app = App::new(Config::default());
+    app.query = "Public search".into();
+    app.items = vec![Track {
+        id: "public".into(),
+        ..Track::default()
+    }];
+    app.account_generation = Some(42);
+    let initial = app.go(Screen::Playlists).unwrap();
+    let payload = |generation| {
+        serde_json::json!({
+            "account_generation": generation,
+            "storefront": "pl",
+            "items": [{"id":"p.private","kind":"library-playlists","storefront":"pl"}],
+            "next": null
+        })
+    };
+    app.accept(&initial, payload(42)).unwrap();
+    assert_eq!(app.items.len(), 1);
+    app.go(Screen::Settings);
+    assert_eq!(app.back_stack.len(), 2);
+    app.account_generation = Some(43);
+    app.invalidate_private_views();
+    assert!(app.restore_view());
+    assert_eq!(app.screen, Screen::Search);
+    assert_eq!(app.items[0].id, "public");
+
+    let next = app.go(Screen::Playlists).unwrap();
+    assert!(app.accept(&next, payload(42)).is_err());
+    assert!(app.items.is_empty());
+    app.accept(&next, payload(43)).unwrap();
+    assert_eq!(app.items.len(), 1);
+    app.account_generation = None;
+    app.invalidate_private_views();
+    assert!(app.items.is_empty());
+    assert!(app.next.is_none() && app.browse_retry.is_none());
 }

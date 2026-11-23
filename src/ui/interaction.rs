@@ -4,6 +4,7 @@ pub(super) struct BrowseView {
     album_view: Option<crate::catalog::album::AlbumRef>,
     playlist_view: Option<crate::catalog::playlist::PlaylistRef>,
     playlist_top: usize,
+    playlist_bytes: usize,
     screen: Screen,
     browse_state: BrowseState,
     browse_retry: Option<Request>,
@@ -20,6 +21,15 @@ pub(super) struct BrowseView {
     selected: usize,
     queue_offset: usize,
     catalog_offset: usize,
+}
+impl BrowseView {
+    fn private(&self) -> bool {
+        crate::catalog::playlist::private_kind(&self.kind)
+            || self
+                .inspected_track
+                .as_ref()
+                .is_some_and(|track| track.kind == "library-songs")
+    }
 }
 pub(super) struct SongActions {
     track: Track,
@@ -51,6 +61,44 @@ impl SongActions {
     }
 }
 impl App {
+    pub(super) fn invalidate_private_views(&mut self) {
+        self.back_stack.retain(|view| !view.private());
+        self.playlist_dialog = None;
+        self.playlist_target = None;
+        let private_browse = crate::catalog::playlist::private_kind(&self.kind);
+        if private_browse {
+            if self.playlist_tracks() {
+                self.kind = "playlists".into();
+            }
+            self.query.clear();
+            self.text.clear();
+            self.input = Input::None;
+            self.catalog_context.clear();
+            self.items.clear();
+            self.next = None;
+            self.previous = None;
+            self.selected = 0;
+            self.catalog_offset = 0;
+            self.playlist_view = None;
+            self.playlist_top = 0;
+            self.playlist_bytes = 0;
+            self.browse_state = BrowseState::Idle;
+            self.browse_retry = None;
+            self.song_actions = None;
+            self.note = "Account changed; reopen the library or playlist".into();
+        }
+        if self
+            .inspected_track
+            .as_ref()
+            .is_some_and(|track| track.kind == "library-songs")
+        {
+            self.inspected_track = None;
+            self.lyrics_result = None;
+            self.lyric_layout.clear();
+            self.lyrics_scroll = None;
+        }
+    }
+
     pub(super) fn remember_view(&mut self) {
         if self.back_stack.len() == 8 {
             self.back_stack.remove(0);
@@ -59,6 +107,7 @@ impl App {
             album_view: self.album_view.clone(),
             playlist_view: self.playlist_view.clone(),
             playlist_top: self.playlist_top,
+            playlist_bytes: self.playlist_bytes,
             screen: self.screen,
             browse_state: self.browse_state,
             browse_retry: self.browse_retry.clone(),
@@ -85,6 +134,7 @@ impl App {
         self.album_view = view.album_view;
         self.playlist_view = view.playlist_view;
         self.playlist_top = view.playlist_top;
+        self.playlist_bytes = view.playlist_bytes;
         self.screen = view.screen;
         self.browse_state = view.browse_state;
         self.search_type = view.search_type;

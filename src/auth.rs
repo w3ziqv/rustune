@@ -3,14 +3,18 @@ use crate::{
     config::{Paths, private_write},
     input::{InputEvent as Event, Reader},
 };
-use anyhow::{Result, ensure};
+use anyhow::{Result, anyhow, ensure};
 use crossterm::{
     event::{DisableBracketedPaste, EnableBracketedPaste, KeyCode, KeyModifiers},
     execute, terminal,
 };
+use nix::fcntl::{Flock, FlockArg, OFlag};
 use std::{
     fmt,
+    fs::{File, OpenOptions},
+    hash::{DefaultHasher, Hash, Hasher},
     io::{self, IsTerminal, Write},
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
 };
 use zeroize::Zeroizing;
 const MAX_TOKEN: usize = 16 * 1024;
@@ -31,11 +35,73 @@ impl SecretToken {
         Ok(Self(Zeroizing::new(s.to_owned())))
     }
 }
+// Keep the lock on a stable file beside the atomically replaced token.
+fn token_lock(paths: &Paths, mode: FlockArg) -> Result<Flock<File>> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags((OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK).bits())
+        .open(paths.config.join("music-user-token.lock"))?;
+    let metadata = file.metadata()?;
+    ensure!(
+        metadata.is_file()
+            && metadata.mode() & 0o077 == 0
+            && metadata.uid() == nix::unistd::Uid::current().as_raw(),
+        "Invalid private token lock"
+    );
+    Flock::lock(file, mode).map_err(|(_, error)| {
+        if error == nix::errno::Errno::EWOULDBLOCK {
+            anyhow!("Account credentials are changing; retry")
+        } else {
+            anyhow!("Could not lock the private token file")
+        }
+    })
+}
+
+pub(crate) fn token_publication(paths: &Paths) -> Result<Flock<File>> {
+    token_lock(paths, FlockArg::LockSharedNonblock)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct TokenStamp {
+    pub device: u64,
+    pub changed: (i64, i64),
+    pub inode: u64,
+    pub mtime: i64,
+    pub nanos: i64,
+    pub size: u64,
+}
+
+impl TokenStamp {
+    // Both same-installation processes can verify this identifier from metadata
+    // without reading or transmitting the token. It is not an authentication secret.
+    pub(crate) fn generation(self) -> u64 {
+        let mut hash = DefaultHasher::new();
+        self.hash(&mut hash);
+        hash.finish()
+    }
+}
+
+pub(crate) fn token_stamp(paths: &Paths) -> Option<TokenStamp> {
+    let metadata = std::fs::symlink_metadata(paths.config.join("music-user-token")).ok()?;
+    metadata.is_file().then(|| TokenStamp {
+        device: metadata.dev(),
+        changed: (metadata.ctime(), metadata.ctime_nsec()),
+        inode: metadata.ino(),
+        mtime: metadata.mtime(),
+        nanos: metadata.mtime_nsec(),
+        size: metadata.len(),
+    })
+}
+
 pub fn save_user_token(paths: &Paths, token: &SecretToken) -> Result<()> {
+    let _lock = token_lock(paths, FlockArg::LockExclusive)?;
     private_write(&paths.config.join("music-user-token"), token.0.as_bytes())
 }
 pub fn has_user_token(paths: &Paths) -> bool {
-    use std::os::unix::fs::MetadataExt;
     std::fs::symlink_metadata(paths.config.join("music-user-token")).is_ok_and(|m| {
         m.is_file()
             && m.mode() & 0o077 == 0
@@ -45,6 +111,7 @@ pub fn has_user_token(paths: &Paths) -> bool {
     })
 }
 pub fn remove_user_token(paths: &Paths) -> Result<()> {
+    let _lock = token_lock(paths, FlockArg::LockExclusive)?;
     let file = paths.config.join("music-user-token");
     match std::fs::symlink_metadata(&file) {
         Ok(m) => {

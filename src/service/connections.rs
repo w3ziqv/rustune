@@ -2,7 +2,7 @@
 use super::{ClientRegistration, Reply, Sender, Status, send};
 use crate::{
     catalog::Catalog,
-    ipc::{Request, read_limited_frame, write_frame},
+    ipc::{Request, read_limited_frame, write_frame, write_payload},
 };
 use anyhow::Result;
 use std::{
@@ -76,6 +76,25 @@ async fn respond(socket: &mut UnixStream, reply: Reply) -> Result<()> {
     timeout(WRITE_TIMEOUT, write_frame(socket, &reply)).await??;
     Ok(())
 }
+async fn respond_private(
+    socket: &mut UnixStream,
+    catalog: &Catalog,
+    generation: Option<u64>,
+    reply: Reply,
+) -> Result<()> {
+    let payload = serde_json::to_vec(&reply)?;
+    let lock = catalog.private_publication().and_then(|lock| {
+        anyhow::ensure!(
+            generation.is_some() && catalog.account_generation() == generation,
+            "Account credentials changed; restart the library search"
+        );
+        Ok(lock)
+    });
+    match lock {
+        Ok(_lock) => timeout(WRITE_TIMEOUT, write_payload(socket, &payload)).await?,
+        Err(error) => respond(socket, Reply::result(Err(error))).await,
+    }
+}
 impl Clients {
     async fn handle(
         mut self,
@@ -124,7 +143,6 @@ impl Clients {
             Request::Browse { kind, term, next } => {
                 let status = self.updates.borrow().clone();
                 let private = crate::catalog::playlist::private_kind(&kind);
-                let account = private.then(|| self.catalog.account_generation()).flatten();
                 let browse = async {
                     let page = self
                         .catalog
@@ -136,22 +154,23 @@ impl Clients {
                             status.profile.limits(),
                         )
                         .await?;
-                    if kind.starts_with("search:") && !term.trim().is_empty() {
+                    if !private && kind.starts_with("search:") && !term.trim().is_empty() {
                         let _ = send(&self.tx, Request::RecordSearch(term.trim().into())).await;
                     }
-                    anyhow::ensure!(
-                        !private
-                            || (account.is_some() && self.catalog.account_generation() == account),
-                        "Account credentials changed; restart the library search"
-                    );
-                    Ok(serde_json::to_value(page)?)
+                    Ok(page)
                 };
                 let mut input = [0];
-                tokio::select! {
+                let page = tokio::select! {
                     biased;
                     _ = socket.read(&mut input) => return Ok(()),
                     result = browse => result,
+                };
+                if private && let Ok(page) = page {
+                    let generation = page.account_generation;
+                    let reply = Reply::result(Ok(serde_json::to_value(page)?));
+                    return respond_private(&mut socket, &self.catalog, generation, reply).await;
                 }
+                page.and_then(|page| Ok(serde_json::to_value(page)?))
             }
             other => send(&self.tx, other).await,
         };
@@ -171,5 +190,59 @@ mod tests {
             .expect("write has its own deadline")
             .unwrap_err();
         assert!(error.is::<tokio::time::error::Elapsed>());
+    }
+
+    #[tokio::test]
+    async fn token_write_waits_for_private_publication_and_old_reply_is_rejected() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = crate::catalog::playlist_tests::paths(directory.path());
+        let catalog = Arc::new(Catalog::new(&paths).unwrap());
+        let generation = catalog.account_generation();
+        let (mut server, mut client) = UnixStream::pair().unwrap();
+        let sender = tokio::spawn({
+            let catalog = catalog.clone();
+            async move {
+                let reply =
+                    Reply::result(Ok(serde_json::Value::String("x".repeat(3 * 1024 * 1024))));
+                respond_private(&mut server, &catalog, generation, reply).await
+            }
+        });
+        let size = timeout(Duration::from_secs(1), client.read_u32())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(size > 3 * 1024 * 1024);
+        // The header proves the responder acquired the lock and started publishing.
+        let lockfile = std::fs::File::open(paths.config.join("music-user-token.lock")).unwrap();
+        let Err((_, denied)) =
+            nix::fcntl::Flock::lock(lockfile, nix::fcntl::FlockArg::LockExclusiveNonblock)
+        else {
+            panic!("an account mutation must not overtake a partially written private reply");
+        };
+        assert_eq!(denied, nix::errno::Errno::EWOULDBLOCK);
+        assert_eq!(catalog.account_generation(), generation);
+        drop(client);
+        assert!(sender.await.unwrap().is_err());
+        crate::auth::save_user_token(
+            &paths,
+            &crate::auth::SecretToken::parse("replacement").unwrap(),
+        )
+        .unwrap();
+        assert_ne!(catalog.account_generation(), generation);
+
+        let (mut server, mut client) = UnixStream::pair().unwrap();
+        let reply = Reply::result(Ok(serde_json::json!("old private value")));
+        respond_private(&mut server, &catalog, generation, reply)
+            .await
+            .unwrap();
+        let response = crate::ipc::read_frame(&mut client).await.unwrap();
+        let reply: Reply = serde_json::from_slice(&response).unwrap();
+        assert!(
+            reply
+                .value()
+                .unwrap_err()
+                .to_string()
+                .contains("credentials changed")
+        );
     }
 }

@@ -155,7 +155,7 @@ async fn account_replacement_between_playlist_pages_rejects_whole_context() {
     let mut first = page(0);
     first["next"] = json!("ignored");
     let region = json!({"data":[{"id":"pl"}]});
-    let (dir, c, http) = fixture(vec![region.clone(), first, region, page(25)]).await;
+    let (dir, c, http) = fixture(vec![region, first]).await;
     let p = playlist::PlaylistRef {
         id: "p.fixture".into(),
         storefront: "pl".into(),
@@ -183,5 +183,5 @@ async fn account_replacement_between_playlist_pages_rejects_whole_context() {
         result.is_err(),
         "Mixed credential generations must not become one queue"
     );
-    http.await.unwrap();
+    assert_eq!(http.await.unwrap().len(), 2);
 }

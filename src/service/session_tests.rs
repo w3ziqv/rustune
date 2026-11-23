@@ -779,6 +779,12 @@ async fn mpris_navigation_keeps_stopped_and_set_position_checks_occurrence_at_ex
 
 #[tokio::test]
 async fn busy_catalog_and_subscriptions_leave_ipc_capacity_for_control() {
+    for apple in [false, true] {
+        check_control_latency_with_busy_catalog(apple).await;
+    }
+}
+
+async fn check_control_latency_with_busy_catalog(apple: bool) {
     use crate::{backend::testing::Controlled, ipc};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let (_dir, e) = super::tests::engine();
@@ -786,7 +792,14 @@ async fn busy_catalog_and_subscriptions_leave_ipc_capacity_for_control() {
     drop(e);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
-    let catalog = Arc::new(Catalog::with_origin(&origin));
+    let metadata_dir = tempfile::tempdir().unwrap();
+    let catalog = Arc::new(if apple {
+        let metadata = crate::catalog::playlist_tests::paths(metadata_dir.path());
+        Catalog::with_music_origin(metadata, origin)
+    } else {
+        Catalog::with_origin(&origin)
+    });
+    let next = apple.then(|| "music:pl:0".to_string());
     let service = tokio::spawn(run_with(
         Config::default(),
         paths.clone(),
@@ -821,23 +834,32 @@ async fn busy_catalog_and_subscriptions_leave_ipc_capacity_for_control() {
             &Request::Browse {
                 kind: "search:songs".into(),
                 term: format!("slow-{i}"),
-                next: None,
+                next: next.clone(),
             },
         )
         .await
         .unwrap();
         clients.push(socket);
     }
-    // The catalogue serializes upstream lookups. The other three browse requests
-    // occupy browse slots while waiting for that same lookup lock.
-    let (upstream, _) = tokio::time::timeout(Duration::from_secs(2), listener.accept())
-        .await
-        .unwrap()
-        .unwrap();
+    let mut upstream = Vec::new();
+    for _ in 0..2 {
+        upstream.push(
+            tokio::time::timeout(Duration::from_secs(2), listener.accept())
+                .await
+                .expect("independent read must reach HTTP while the first waits")
+                .unwrap()
+                .0,
+        );
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(60), listener.accept())
+            .await
+            .is_err()
+    );
     let req = Request::Browse {
         kind: "search:songs".into(),
         term: "extra".into(),
-        next: None,
+        next: next.clone(),
     };
     let excess = ipc::request(&paths, &req);
     assert!(
@@ -859,10 +881,23 @@ async fn busy_catalog_and_subscriptions_leave_ipc_capacity_for_control() {
         clients.push(socket);
     }
     for cmd in [Request::Pause, Request::Status] {
-        tokio::time::timeout(Duration::from_millis(800), ipc::request(&paths, &cmd))
-            .await
-            .unwrap()
-            .expect("control slot under load");
+        let mut samples = Vec::new();
+        for _ in 0..100 {
+            let start = std::time::Instant::now();
+            tokio::time::timeout(Duration::from_millis(800), ipc::request(&paths, &cmd))
+                .await
+                .expect("control slot under load")
+                .unwrap();
+            samples.push(start.elapsed());
+        }
+        samples.sort_unstable();
+        let p95 = samples[94];
+        let provider = if apple { "Apple Music" } else { "iTunes" };
+        println!(
+            "{provider} {cmd:?}: n=100 p95={:.3} ms",
+            p95.as_secs_f64() * 1000.0
+        );
+        assert!(p95 < Duration::from_millis(100));
     }
     let mut header = tokio::net::UnixStream::connect(paths.socket())
         .await

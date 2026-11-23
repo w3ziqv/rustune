@@ -92,6 +92,8 @@ pub struct Status {
     pub profile: PerformanceMode,
     #[serde(default = "crate::config::default_catalog_country")]
     pub catalog_country: String,
+    #[serde(default)]
+    pub account_generation: Option<u64>,
     pub pid: u32,
     pub browser_pid: Option<u32>,
     #[serde(default)]
@@ -392,6 +394,7 @@ impl Engine {
             shuffle: self.queue.shuffle,
             profile: self.config.performance,
             catalog_country: self.config.catalog_country.clone(),
+            account_generation: self.catalog.account_generation(),
             pid: std::process::id(),
             browser_pid: None,
             audio_pid: self.audio.as_ref().and_then(|a| a.pid()),
@@ -1045,7 +1048,13 @@ pub(crate) async fn run_with(
                 }}
             _=timer.tick()=>{
                 engine.factory.refresh().await;
-                if engine.factory.available(&engine.paths)!=state_tx.borrow().start_available {
+                let next_account = engine.catalog.account_generation();
+                let changed = {
+                    let state = state_tx.borrow();
+                    next_account != state.account_generation
+                        || engine.factory.available(&engine.paths) != state.start_available
+                };
+                if changed {
                     state_tx.send_replace(engine.status());
                 }
                 if engine.sleep_until.is_some_and(|until|Instant::now()>=until){engine.sleep_until=None;let _=engine.audio_control(Control::Pause(true)).await;engine.desired_paused=true;engine.transport_epoch+=1;engine.message="Sleep timer paused playback".into();}
