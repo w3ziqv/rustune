@@ -52,7 +52,6 @@ impl<K: Eq + Hash, V: Clone + Send + Sync + 'static> Reads<K, V> {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct LocalBudget {
-    pub retry_at: Instant,
     provider: &'static str,
 }
 
@@ -74,6 +73,13 @@ pub(super) struct Budget {
 }
 
 impl Budget {
+    pub fn quiet_at(&self) -> Option<Instant> {
+        self.calls
+            .back()
+            .map(|call| *call + Duration::from_secs(60))
+            .filter(|when| *when > Instant::now())
+    }
+
     pub fn reserve(&mut self, provider: &'static str) -> Result<()> {
         let now = Instant::now();
         if let Some(until) = self.blocked_until.filter(|until| *until > now) {
@@ -90,11 +96,7 @@ impl Budget {
             self.calls.pop_front();
         }
         if self.calls.len() >= 20 {
-            return Err(LocalBudget {
-                retry_at: self.calls[0] + Duration::from_secs(60),
-                provider,
-            }
-            .into());
+            return Err(LocalBudget { provider }.into());
         }
         self.calls.push_back(now);
         Ok(())

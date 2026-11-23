@@ -503,7 +503,13 @@ impl Engine {
             _ => {}
         }
         match request {
-            Request::PlaylistWrite { .. } => self.begin_playlist_write(request, None)?,
+            Request::PlaylistWrite {
+                account_generation, ..
+            } => {
+                let generation = account_generation
+                    .context("Confirm the playlist write under the current account")?;
+                self.begin_playlist_write(request, generation)?;
+            }
             Request::RetryPlaylistWrite => {
                 let expected = self.playlist_write_status.as_ref()
                     .filter(|status| status.can_retry)
@@ -513,7 +519,7 @@ impl Engine {
                     .playlist_write_retry
                     .clone()
                     .context("No playlist operation to retry")?;
-                self.begin_playlist_write(request, Some(expected))?;
+                self.begin_playlist_write(request, expected)?;
             }
             Request::Equalizer(settings) => {
                 settings.validate()?;

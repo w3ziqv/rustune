@@ -26,6 +26,8 @@ pub enum Request {
     },
     PlaylistWrite {
         key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        account_generation: Option<u64>,
         source: PlaylistWriteSource,
         action: crate::catalog::playlist_write::WriteAction,
     },

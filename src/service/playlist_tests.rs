@@ -53,8 +53,9 @@ async fn playlist_play_starts_second_duplicate_by_source_position() {
     http.await.unwrap();
 }
 use crate::{catalog::playlist_write::WriteAction, ipc::PlaylistWriteSource};
-fn create(key: &str, source: PlaylistWriteSource) -> Request {
+fn create(e: &Engine, key: &str, source: PlaylistWriteSource) -> Request {
     Request::PlaylistWrite {
+        account_generation: e.catalog.account_generation(),
         key: key.into(),
         source,
         action: WriteAction::Create {
@@ -96,6 +97,7 @@ async fn account_write_snapshot_preserves_duplicates_and_replays_after_queue_cha
     e.catalog = Arc::new(c);
     let queue = serde_json::to_value(&e.queue).unwrap();
     let request = create(
+        &e,
         "saved",
         PlaylistWriteSource::Queue {
             revision: e.queue.revision,
@@ -129,7 +131,7 @@ async fn uncertain_write_cannot_retry_or_resend_same_key() {
     ])
     .await;
     e.catalog = Arc::new(c);
-    let request = create("lost", PlaylistWriteSource::Empty);
+    let request = create(&e, "lost", PlaylistWriteSource::Empty);
     e.handle(request.clone()).await.unwrap();
     let done = written(&mut e).await;
     assert_eq!(done.phase, "uncertain");
@@ -145,6 +147,7 @@ async fn stale_and_oversized_exports_and_bad_journal_never_reach_http() {
     let (_cd, c, http) = crate::catalog::playlist_write_tests::server(vec![]).await;
     e.catalog = Arc::new(c);
     e.handle(create(
+        &e,
         "stale",
         PlaylistWriteSource::Queue {
             revision: e.queue.revision + 1,
@@ -164,6 +167,7 @@ async fn stale_and_oversized_exports_and_bad_journal_never_reach_http() {
             .unwrap();
     }
     e.handle(create(
+        &e,
         "large",
         PlaylistWriteSource::Queue {
             revision: e.queue.revision,
@@ -174,7 +178,7 @@ async fn stale_and_oversized_exports_and_bad_journal_never_reach_http() {
     let result = written(&mut e).await;
     assert!(result.message.contains("1000"));
     private_write(&e.paths.data.join("playlist-writes.json"), b"broken").unwrap();
-    e.handle(create("bad-disk", PlaylistWriteSource::Empty))
+    e.handle(create(&e, "bad-disk", PlaylistWriteSource::Empty))
         .await
         .unwrap();
     assert_eq!(written(&mut e).await.phase, "rejected");
@@ -190,7 +194,7 @@ async fn held_writer_lock_blocks_another_actor_without_touching_account() {
     let (_cd, c, http) = crate::catalog::playlist_write_tests::server(vec![]).await;
     e.catalog = Arc::new(c);
     let _lock = playlist_journal::acquire(&e.paths).unwrap();
-    e.handle(create("locked", PlaylistWriteSource::Empty))
+    e.handle(create(&e, "locked", PlaylistWriteSource::Empty))
         .await
         .unwrap();
     let done = written(&mut e).await;
@@ -228,7 +232,7 @@ async fn pending_account_response_does_not_block_pause_volume_or_status() {
     .await;
     e.catalog = Arc::new(c);
     let before = serde_json::to_value(&e.queue).unwrap();
-    e.handle(create("slow", PlaylistWriteSource::Empty))
+    e.handle(create(&e, "slow", PlaylistWriteSource::Empty))
         .await
         .unwrap();
     tokio::time::timeout(Duration::from_secs(3), reached.notified())
@@ -311,7 +315,7 @@ async fn advance_budget_by(seconds: u64) {
 }
 
 #[tokio::test]
-async fn a_450_track_playlist_reads_fresh_after_prefetch_and_waits_for_budget() {
+async fn a_450_track_playlist_restarts_after_budget_wait_and_uses_the_new_order() {
     let (_dir, mut e) = super::tests::engine();
     let driver = Arc::new(crate::backend::testing::Controlled::default());
     e.factory = driver.clone();
@@ -328,7 +332,16 @@ async fn a_450_track_playlist_reads_fresh_after_prefetch_and_waits_for_budget() 
     let page =
         |offset: usize| fixture_playlist_page(offset + 1..=offset + 25, 450, offset + 25 < 450);
     let mut bodies = vec![json!({"data":[{"id":"pl"}]}), page(0), page(25)];
-    bodies.extend((0..450).step_by(25).map(page));
+    bodies.extend((0..425).step_by(25).map(page));
+    bodies.extend((0..450).step_by(25).map(|offset| {
+        let ids = (offset + 1..=offset + 25).map(|id| match id {
+            38 => 37, // A true duplicate that must survive the restart.
+            425 => 426,
+            426 => 425,
+            _ => id,
+        });
+        fixture_playlist_page(ids, 450, offset + 25 < 450)
+    }));
     let (_catalog_dir, catalog, http) = crate::catalog::playlist_tests::fixture(bodies).await;
     e.catalog = Arc::new(catalog);
     let kind = "open:library-playlists:p.fixture";
@@ -372,7 +385,21 @@ async fn a_450_track_playlist_reads_fresh_after_prefetch_and_waits_for_budget() 
         "waiting leaves the current audio helper alone"
     );
 
+    // Only the three initial calls have expired. The old prefix cannot resume here.
     advance_budget_by(30).await;
+    let event = tokio::time::timeout(Duration::from_millis(50), e.album_events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(event, operations::AlbumEvent::Progress(_, _, 0)));
+    e.album_event(event).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), e.album_events.recv())
+            .await
+            .is_err()
+    );
+    assert_eq!(e.operation.as_ref().unwrap().loaded, 0);
+    advance_budget_by(31).await;
     let event = prepared_event(&mut e).await;
     e.album_event(event).await;
     let done = tokio::time::timeout(Duration::from_secs(2), e.disk_events.recv())
@@ -382,16 +409,24 @@ async fn a_450_track_playlist_reads_fresh_after_prefetch_and_waits_for_budget() 
     e.disk_complete(done).await;
     assert_eq!(e.queue.tracks.len(), 450);
     assert_eq!(e.queue.current, Some(20));
+    let ids: Vec<_> = e
+        .queue
+        .tracks
+        .iter()
+        .map(|entry| entry.track.id.as_str())
+        .collect();
+    assert_eq!(&ids[423..427], &["424", "426", "425", "427"]);
+    assert_eq!(&ids[36..39], &["37", "37", "39"]);
     let requests = tokio::time::timeout(Duration::from_secs(2), http)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(
         requests.len(),
-        21,
-        "prefetch, 18 fresh pages, and one storefront"
+        38,
+        "two prefetched pages, 17 discarded pages, 18 fresh pages and a storefront"
     );
-    for (page, request) in requests.iter().skip(3).enumerate() {
+    for (page, request) in requests.iter().skip(20).enumerate() {
         let offset = page * 25;
         assert!(request.contains(&format!("offset={offset}&")), "{request}");
     }
@@ -559,6 +594,11 @@ async fn account_rotation_cancels_a_playlist_waiting_for_local_budget() {
     e.handle(play_at(&e, "wait-then-rotate", 0, "1"))
         .await
         .unwrap();
+    let event = tokio::time::timeout(Duration::from_secs(1), e.album_events.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(event, operations::AlbumEvent::Progress(_, _, 0)));
     assert!(
         tokio::time::timeout(Duration::from_millis(50), e.album_events.recv())
             .await
@@ -594,7 +634,7 @@ async fn retry_playlist_write_uses_the_previous_operations_generation() {
         account_generation: generation,
         ..Default::default()
     });
-    e.playlist_write_retry = Some(create("retry-previous", PlaylistWriteSource::Empty));
+    e.playlist_write_retry = Some(create(&e, "retry-previous", PlaylistWriteSource::Empty));
     crate::auth::save_user_token(
         &paths,
         &crate::auth::SecretToken::parse("new-fixture-token").unwrap(),
@@ -603,4 +643,35 @@ async fn retry_playlist_write_uses_the_previous_operations_generation() {
     let error = e.handle(Request::RetryPlaylistWrite).await.unwrap_err();
     assert!(error.to_string().contains("credentials changed"));
     assert!(e.playlist_write_task.is_none());
+}
+
+#[tokio::test]
+async fn a_confirmed_write_cannot_start_after_the_account_changes() {
+    let (_dir, mut e) = super::tests::engine();
+    let folder = tempfile::tempdir().unwrap();
+    let paths = crate::catalog::playlist_tests::paths(folder.path());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    e.catalog = Arc::new(Catalog::with_music_origin(
+        paths.clone(),
+        format!("http://{}", listener.local_addr().unwrap()),
+    ));
+    let confirmed = create(
+        &e,
+        "confirmed-under-old-account",
+        PlaylistWriteSource::Empty,
+    );
+    crate::auth::save_user_token(
+        &paths,
+        &crate::auth::SecretToken::parse("new-fixture-token").unwrap(),
+    )
+    .unwrap();
+    let error = e.handle(confirmed).await.unwrap_err();
+    assert!(error.to_string().contains("credentials changed"));
+    assert!(e.playlist_write_task.is_none());
+    assert!(e.playlist_write_status.is_none());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
 }

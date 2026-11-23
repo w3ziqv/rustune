@@ -124,6 +124,7 @@ impl App {
         self.playlist_dialog = Some(PlaylistDialog::Confirm {
             request: Box::new(Request::PlaylistWrite {
                 key: ipc::operation_key(),
+                account_generation: self.account_generation,
                 source,
                 action,
             }),

@@ -84,19 +84,50 @@ impl Catalog {
         playlist: &PlaylistRef,
         binding: PlaylistRead,
         limits: Limits,
-        progress: impl FnMut(usize),
+        mut progress: impl FnMut(usize),
     ) -> Result<PreparedAlbum> {
+        use super::reads::LocalBudget;
         playlist.validate()?;
-        // Collection uses the same profile and account from the first page through commit.
         self.check_playlist_binding(binding)?;
-        self.collect_context(
-            &format!("open:library-playlists:{}", playlist.id),
-            playlist.context(),
-            Some(binding),
-            limits,
-            progress,
-        )
-        .await
+        let kind = format!("open:library-playlists:{}", playlist.id);
+        let first = self
+            .collect_context(
+                &kind,
+                playlist.context(),
+                Some(binding),
+                limits,
+                &mut progress,
+            )
+            .await;
+        if !first.as_ref().is_err_and(|error| error.is::<LocalBudget>()) {
+            return first;
+        }
+        // A prefix collected before throttling cannot be combined with later pages.
+        // Retry once after the full local budget becomes available.
+        progress(0);
+        self.wait_for_playlist_budget(binding).await?;
+        self.collect_context(&kind, playlist.context(), Some(binding), limits, progress).await
+            .map_err(|error| {
+                if error.is::<LocalBudget>() {
+                    anyhow::anyhow!("Could not read the complete playlist before the request limit; retry later. Queue unchanged")
+                } else {
+                    error
+                }
+            })
+    }
+
+    async fn wait_for_playlist_budget(&self, binding: PlaylistRead) -> Result<()> {
+        use tokio::time::{Instant, sleep_until, timeout};
+        let apple = self
+            .apple
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Apple Music unavailable"))?;
+        timeout(Duration::from_secs(75), async {
+            while let Some(ready) = apple.playlist_budget_quiet_at(binding)? {
+                sleep_until(ready.min(Instant::now() + Duration::from_millis(250))).await;
+            }
+            Ok(())
+        }).await.map_err(|_| anyhow::anyhow!("Could not reserve a quiet request window for the playlist; retry later. Queue unchanged"))?
     }
 
     pub(super) async fn playlist_page(
@@ -107,39 +138,12 @@ impl Catalog {
         limits: Limits,
         binding: PlaylistRead,
     ) -> Result<Page> {
-        use tokio::time::{Instant, sleep_until, timeout};
-        timeout(Duration::from_secs(75), async {
-            loop {
-                self.check_playlist_binding(binding)?;
-                let result = self
-                    .browse(kind, "", Some(cursor), storefront, limits)
-                    .await;
-                self.check_playlist_binding(binding)?;
-                let Some(limit) = result
-                    .as_ref()
-                    .err()
-                    .and_then(|error| error.downcast_ref::<super::reads::LocalBudget>())
-                else {
-                    return result;
-                };
-                // No active read or provider permit survives into this wait.
-                while Instant::now() < limit.retry_at {
-                    sleep_until(
-                        limit
-                            .retry_at
-                            .min(Instant::now() + Duration::from_millis(250)),
-                    )
-                    .await;
-                    self.check_playlist_binding(binding)?;
-                }
-            }
-        })
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "Apple Music playlist page timed out waiting for the request budget; retry"
-            )
-        })?
+        self.check_playlist_binding(binding)?;
+        let result = self
+            .browse(kind, "", Some(cursor), storefront, limits)
+            .await;
+        self.check_playlist_binding(binding)?;
+        result
     }
 }
 pub fn page_cursor(storefront: &str, generation: u64, offset: usize) -> String {

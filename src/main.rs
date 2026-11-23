@@ -514,6 +514,7 @@ mod playlist_cli_tests {
             parse(&["rustune", "playlist", "create", "Synthetic"]),
             Request::PlaylistWrite {
                 source: ipc::PlaylistWriteSource::Empty,
+                account_generation: Some(42),
                 ..
             }
         ));

@@ -355,7 +355,7 @@ fn playlists_open_whole_context_and_queue_save_requires_name_and_confirmation() 
         "Name entry does not send account POST"
     );
     assert!(
-        matches!(press(&mut app,KeyCode::Enter),Some(Request::PlaylistWrite{source:ipc::PlaylistWriteSource::Queue{..},action:crate::catalog::playlist_write::WriteAction::Create{name,..},..}) if name=="My queue")
+        matches!(press(&mut app,KeyCode::Enter),Some(Request::PlaylistWrite{account_generation:Some(42),source:ipc::PlaylistWriteSource::Queue{..},action:crate::catalog::playlist_write::WriteAction::Create{name,..},..}) if name=="My queue")
     );
 }
 #[test]
@@ -460,6 +460,7 @@ fn delayed_playlist_write_ack_cannot_regress_subscribed_terminal_status() {
     let value = |phase| serde_json::json!({"playback":{},"queue_len":3,"current":null,"repeat":"off","shuffle":false,"profile":"balanced","pid":1,"browser_pid":null,"backend":"test","browser_shared":false,"uptime_secs":0,"cache_entries":0,"message":"","sleep_remaining":null,"playlist_write":{"id":"key","phase":phase,"tracks":3,"result":null,"message":"Synthetic","can_retry":false}});
     app.on_status(serde_json::from_value(value("completed")).unwrap());
     let request = Request::PlaylistWrite {
+        account_generation: Some(42),
         key: "key".into(),
         source: ipc::PlaylistWriteSource::Empty,
         action: crate::catalog::playlist_write::WriteAction::Create {

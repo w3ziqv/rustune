@@ -116,6 +116,7 @@ impl PlaylistCommand {
             }
         };
         let write = |key: Option<String>, source, action| Request::PlaylistWrite {
+            account_generation: generation,
             key: key.unwrap_or_else(ipc::operation_key),
             source,
             action,

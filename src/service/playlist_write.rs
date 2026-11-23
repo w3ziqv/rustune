@@ -67,15 +67,12 @@ impl Engine {
             })
             .collect()
     }
-    pub(super) fn begin_playlist_write(
-        &mut self,
-        request: Request,
-        expected: Option<u64>,
-    ) -> Result<()> {
+    pub(super) fn begin_playlist_write(&mut self, request: Request, expected: u64) -> Result<()> {
         let Request::PlaylistWrite {
             key,
             source,
             action,
+            ..
         } = &request
         else {
             anyhow::bail!("Invalid playlist write request");
@@ -92,7 +89,7 @@ impl Engine {
                 .account_generation()
                 .context("No current Apple Music account")?;
             ensure!(
-                expected.is_none_or(|expected| expected == generation),
+                expected == generation,
                 "Account credentials changed; inspect the previous playlist operation"
             );
             (account, generation)
@@ -131,7 +128,16 @@ impl Engine {
         {
             self.cancel_operation(&key)?;
         }
-        let fingerprint = serde_json::to_string(&request)?;
+        // The journal already binds receipts to credentials. Keep its request fingerprint
+        // compatible with releases that did not include a generation in the IPC command.
+        let mut journal_request = request.clone();
+        if let Request::PlaylistWrite {
+            account_generation, ..
+        } = &mut journal_request
+        {
+            *account_generation = None;
+        }
+        let fingerprint = serde_json::to_string(&journal_request)?;
         let ids = self.export_ids(source).map_err(|e| e.to_string());
         let paths = self.paths.clone();
         let catalog = self.catalog.clone();

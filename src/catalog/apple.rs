@@ -195,6 +195,24 @@ impl AppleCatalog {
         })
     }
 
+    pub(super) fn playlist_budget_quiet_at(
+        &self,
+        binding: PlaylistRead,
+    ) -> Result<Option<tokio::time::Instant>> {
+        self.with_account(
+            Some(Account {
+                generation: binding.generation,
+            }),
+            |state| {
+                ensure!(
+                    state.playlist_epoch == binding.epoch,
+                    "Playlist changed while loading; refresh the playlist"
+                );
+                Ok(state.budget.quiet_at())
+            },
+        )?
+    }
+
     fn check_account(&self, expected: Option<Account>) -> Result<()> {
         if let Some(expected) = expected {
             ensure!(
