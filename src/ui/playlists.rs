@@ -25,7 +25,54 @@ const ACTIONS: [&str; 5] = [
     "Append playlist to queue",
     "Add current queue to this Apple playlist",
 ];
+pub(super) const TRACK_WINDOW: usize = 25;
+const PREFETCH_MARGIN: usize = 5;
+
 impl App {
+    pub(super) fn playlist_tracks(&self) -> bool {
+        self.kind.starts_with("open:library-playlists:")
+    }
+
+    pub(super) fn playlist_range(&self, height: usize) -> Range<usize> {
+        let height = height.min(TRACK_WINDOW).min(self.items.len());
+        if height == 0 {
+            return 0..0;
+        }
+        let first = self.selected.saturating_add(1).saturating_sub(height);
+        let start = self
+            .playlist_top
+            .clamp(first, self.selected)
+            .min(self.items.len() - height);
+        start..start + height
+    }
+
+    pub(super) fn update_playlist_top(&mut self) {
+        if self.playlist_tracks() {
+            let main = navigation::layout(self.viewport, self.screen).main;
+            self.playlist_top = self
+                .playlist_range(usize::from(
+                    main.height.saturating_sub(self.catalog_header_height()),
+                ))
+                .start;
+        }
+    }
+
+    pub(super) fn playlist_page(&self, requested: bool) -> Option<Request> {
+        if !self.playlist_tracks()
+            || self.browse_state == BrowseState::Loading
+            || (!requested
+                && (self.browse_state != BrowseState::Ready
+                    || self.selected.saturating_add(PREFETCH_MARGIN) < self.items.len()))
+        {
+            return None;
+        }
+        Some(Request::Browse {
+            kind: self.kind.clone(),
+            term: self.query.clone(),
+            next: Some(self.next.clone()?),
+        })
+    }
+
     pub(super) fn selected_playlist(&self) -> Option<PlaylistRef> {
         self.items
             .get(self.selected)

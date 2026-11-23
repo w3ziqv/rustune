@@ -20,13 +20,16 @@ impl AppleCatalog {
         account: CredentialStamp,
     ) -> std::result::Result<PlaylistWriteResult, WriteFailure> {
         let body = payload(action, ids).map_err(|e| WriteFailure::rejected(e.to_string()))?;
-        let mut state = self.state.lock().await;
+        let _write = self.writes.lock().await;
         let preflight = async {
             ensure!(
                 self.credential_stamp()? == account,
                 "Account credentials changed before playlist write; nothing sent"
             );
-            let region = self.get("me/storefront", &[], true, &mut state).await?;
+            let generation = self
+                .account()
+                .ok_or_else(|| anyhow!("A Music User Token is required"))?;
+            let region = self.get("me/storefront", &[], Some(generation)).await?;
             if let WriteAction::Add { playlist } = action {
                 ensure!(
                     region["data"]
@@ -40,8 +43,7 @@ impl AppleCatalog {
                     .get(
                         &format!("me/library/playlists/{}", playlist.id),
                         &[],
-                        true,
-                        &mut state,
+                        Some(generation),
                     )
                     .await?;
                 let resource = &response["data"][0];
@@ -52,10 +54,6 @@ impl AppleCatalog {
                     "Playlist is no longer editable; nothing sent"
                 );
             }
-            ensure!(
-                state.calls.len() < 20,
-                "Apple Music request budget reached; retry later"
-            );
             let headers = self.headers(true).await?;
             ensure!(
                 self.credential_stamp()? == account,
@@ -71,9 +69,14 @@ impl AppleCatalog {
         };
         let bytes = serde_json::to_vec(&body)
             .map_err(|_| WriteFailure::rejected("Invalid playlist payload"))?;
-        state.cache = Cache::new(self.capacity.load(Ordering::Relaxed));
-        self.entries.store(0, Ordering::Relaxed);
-        state.calls.push_back(Instant::now());
+        {
+            let mut state = self.state.lock().expect("Apple catalog state");
+            state
+                .budget
+                .reserve("Apple Music")
+                .map_err(|e| WriteFailure::rejected(e.to_string()))?;
+            self.clear_cache(&mut state);
+        }
         let response = self
             .client
             .post(format!("{}/v1/{path}", self.origin))
@@ -92,7 +95,11 @@ impl AppleCatalog {
                 .and_then(|n| n.parse::<u64>().ok())
                 .unwrap_or(60)
                 .clamp(1, 3600);
-            state.blocked = Some(Instant::now() + Duration::from_secs(wait));
+            self.state
+                .lock()
+                .expect("Apple catalog state")
+                .budget
+                .block(wait);
         }
         if !(200..300).contains(&code) {
             let message = format!("Apple playlist write returned HTTP {code}");
@@ -134,8 +141,7 @@ impl AppleCatalog {
                 ));
             }
         };
-        state.cache = Cache::new(self.capacity.load(Ordering::Relaxed));
-        self.entries.store(0, Ordering::Relaxed);
+        self.clear_cache(&mut self.state.lock().expect("Apple catalog state"));
         Ok(result)
     }
 }

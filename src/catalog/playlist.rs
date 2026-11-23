@@ -63,7 +63,7 @@ impl Catalog {
         Ok(prepared)
     }
 }
-pub(super) fn private_kind(kind: &str) -> bool {
+pub(crate) fn private_kind(kind: &str) -> bool {
     matches!(
         kind,
         "library" | "search:library-songs" | "playlists" | "search:playlists" | "recent"

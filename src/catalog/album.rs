@@ -78,7 +78,9 @@ impl Catalog {
         limits: Limits,
         mut progress: impl FnMut(usize),
     ) -> Result<PreparedAlbum> {
-        let mut cursor = Some(format!("{}:{}:0", context.provider, context.storefront));
+        let first_cursor = (!super::playlist::private_kind(kind))
+            .then(|| format!("{}:{}:0", context.provider, context.storefront));
+        let mut cursor = Some(first_cursor);
         let mut tracks = Vec::new();
         let mut skipped = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -95,8 +97,14 @@ impl Catalog {
                 "Album/playlist page limit reached; nothing committed"
             );
             let page = self
-                .browse(kind, "", Some(&next), &context.storefront, limits)
+                .browse(kind, "", next.as_deref(), &context.storefront, limits)
                 .await?;
+            ensure!(
+                page.storefront
+                    .as_deref()
+                    .is_some_and(|r| r.eq_ignore_ascii_case(&context.storefront)),
+                "Catalog storefront changed; reopen the album or playlist"
+            );
             if let Some(total) = page.total {
                 ensure!(
                     expected.is_none_or(|old| old == total),
@@ -142,7 +150,7 @@ impl Catalog {
                 tracks.push(track);
             }
             progress(count);
-            cursor = page.next;
+            cursor = page.next.map(Some);
         }
         ensure!(
             expected.is_none_or(|total| total == count),

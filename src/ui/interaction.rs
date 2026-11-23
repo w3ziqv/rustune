@@ -3,6 +3,7 @@ use super::*;
 pub(super) struct BrowseView {
     album_view: Option<crate::catalog::album::AlbumRef>,
     playlist_view: Option<crate::catalog::playlist::PlaylistRef>,
+    playlist_top: usize,
     screen: Screen,
     browse_state: BrowseState,
     browse_retry: Option<Request>,
@@ -57,6 +58,7 @@ impl App {
         self.back_stack.push(BrowseView {
             album_view: self.album_view.clone(),
             playlist_view: self.playlist_view.clone(),
+            playlist_top: self.playlist_top,
             screen: self.screen,
             browse_state: self.browse_state,
             browse_retry: self.browse_retry.clone(),
@@ -82,6 +84,7 @@ impl App {
         self.playlist_target = None;
         self.album_view = view.album_view;
         self.playlist_view = view.playlist_view;
+        self.playlist_top = view.playlist_top;
         self.screen = view.screen;
         self.browse_state = view.browse_state;
         self.search_type = view.search_type;

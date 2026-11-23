@@ -131,9 +131,7 @@ impl App {
             return self.playlist_request(
                 playlist.clone(),
                 ipc::ContextAction::PlayFromPosition {
-                    source_index: track
-                        .source_index
-                        .unwrap_or(self.catalog_offset + self.selected),
+                    source_index: track.source_index.unwrap_or(self.selected),
                     shuffle: false,
                 },
             );

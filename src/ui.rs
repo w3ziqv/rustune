@@ -131,6 +131,7 @@ pub struct App {
     album_actions: Option<album::AlbumActions>,
     album_view: Option<crate::catalog::album::AlbumRef>,
     playlist_view: Option<crate::catalog::playlist::PlaylistRef>,
+    playlist_top: usize,
     playlist_dialog: Option<playlists::PlaylistDialog>,
     playlist_target: Option<ipc::PlaylistWriteSource>,
     queue_rows: Vec<crate::queue::QueueEntry>,
@@ -171,6 +172,19 @@ pub struct App {
     inspected_track: Option<Track>,
 }
 impl App {
+    fn dispatch(&mut self, jobs: &mpsc::Sender<Request>, request: Request) {
+        if matches!(request, Request::Browse { .. }) {
+            self.browse_state = BrowseState::Loading;
+            self.browse_retry = Some(request.clone());
+        }
+        match jobs.try_send(request) {
+            Ok(()) => self.busy = true,
+            Err(error) => {
+                self.request_failed(&error.into_inner());
+                self.note = "Command queue is full; wait for the current request.".into();
+            }
+        }
+    }
     fn request_failed(&mut self, request: &Request) {
         if let Request::Browse { kind, term, .. } = request
             && kind == &self.kind
@@ -202,6 +216,7 @@ impl App {
             album_actions: None,
             album_view: None,
             playlist_view: None,
+            playlist_top: 0,
             playlist_dialog: None,
             playlist_target: None,
             queue_rows: Vec::new(),
@@ -430,18 +445,11 @@ impl App {
             Request::Browse {
                 kind: self.kind.clone(),
                 term: self.query.clone(),
-                next: if let Some(playlist) = self
-                    .playlist_view
+                next: self
+                    .album_view
                     .as_ref()
-                    .filter(|_| self.kind.starts_with("open:library-playlists:"))
-                {
-                    Some(format!("music:{}:0", playlist.storefront))
-                } else {
-                    self.album_view
-                        .as_ref()
-                        .filter(|_| self.kind.starts_with("open:albums:"))
-                        .map(|album| format!("{}:{}:0", album.provider, album.storefront))
-                },
+                    .filter(|_| self.kind.starts_with("open:albums:"))
+                    .map(|album| format!("{}:{}:0", album.provider, album.storefront)),
             }
         }
     }
@@ -962,6 +970,7 @@ impl App {
                     } else {
                         self.remember_view();
                         self.catalog_offset = 0;
+                        self.playlist_top = 0;
                         self.playlist_view = self.selected_playlist();
                         self.album_view = self.selected_album();
                         self.kind = format!("open:{}:{}", track.kind, track.id);
@@ -1018,7 +1027,9 @@ impl App {
                 }
             }
             Some("page_back") => {
-                if self.screen == Screen::Queue && self.queue_offset > 0 {
+                if self.playlist_tracks() {
+                    self.selected = self.selected.saturating_sub(playlists::TRACK_WINDOW);
+                } else if self.screen == Screen::Queue && self.queue_offset > 0 {
                     self.queue_offset = self
                         .queue_offset
                         .saturating_sub(self.config.performance.limits().page_size);
@@ -1048,7 +1059,13 @@ impl App {
                 }
             }
             Some("page") => {
-                if self.screen == Screen::Queue {
+                if self.playlist_tracks() {
+                    self.selected = self
+                        .selected
+                        .saturating_add(playlists::TRACK_WINDOW)
+                        .min(self.items.len().saturating_sub(1));
+                    req = self.playlist_page(true);
+                } else if self.screen == Screen::Queue {
                     if self
                         .status
                         .as_ref()
@@ -1145,6 +1162,11 @@ impl App {
                 _ => {}
             },
         }
+        self.update_playlist_top();
+        if req.is_none() && self.focus == Focus::Content && matches!(action, Some("down" | "page"))
+        {
+            req = self.playlist_page(false);
+        }
         Ok((false, req))
     }
     fn accept(&mut self, r: &Request, value: serde_json::Value) -> Result<()> {
@@ -1159,6 +1181,10 @@ impl App {
                 if kind != &self.kind || term != &self.query {
                     return Ok(());
                 }
+                let append = self.playlist_tracks() && next.is_some();
+                if append && next != &self.next {
+                    return Ok(());
+                }
                 self.catalog_offset = next
                     .as_deref()
                     .and_then(|n| n.rsplit(':').next()?.parse().ok())
@@ -1167,7 +1193,15 @@ impl App {
                 self.browse_state = BrowseState::Ready;
                 self.browse_retry = None;
                 self.catalog_context = p.context.unwrap_or_else(|| "Apple/iTunes catalog".into());
-                self.items = p.items;
+                if append {
+                    self.items.extend(p.items);
+                } else {
+                    self.items = p.items;
+                    if self.playlist_tracks() {
+                        self.selected = 0;
+                        self.playlist_top = 0;
+                    }
+                }
                 self.next = p.next;
                 self.previous = p.previous;
                 self.note = format!(
@@ -1486,6 +1520,18 @@ impl App {
             status,
         );
     }
+    fn catalog_header_height(&self) -> u16 {
+        if matches!(self.screen, Screen::Playlists | Screen::Queue)
+            && self
+                .status
+                .as_ref()
+                .is_some_and(|s| s.playlist_write.is_some())
+        {
+            3
+        } else {
+            2
+        }
+    }
     fn content(&self, f: &mut Frame, a: Rect, p: Palette) {
         if self.screen == Screen::Equalizer {
             self.render_equalizer(f, a, p);
@@ -1589,7 +1635,7 @@ impl App {
                 title
             };
             let [header, list] = Layout::vertical([
-                Constraint::Length(if write.is_some() { 3 } else { 2 }),
+                Constraint::Length(self.catalog_header_height()),
                 Constraint::Fill(1),
             ])
             .areas(a);
@@ -1616,7 +1662,11 @@ impl App {
                 );
                 return;
             }
-            let range = visible_range(self.selected, self.items.len(), list.height as usize);
+            let range = if self.playlist_tracks() {
+                self.playlist_range(usize::from(list.height))
+            } else {
+                visible_range(self.selected, self.items.len(), usize::from(list.height))
+            };
             let rows: Vec<_> = range
                 .map(|i| {
                     let t = &self.items[i];
@@ -1852,7 +1902,7 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                         },
                         _=>{}
                     }
-                    if let Some(r)=request{if matches!(r, Request::Browse { .. }) { app.browse_state=BrowseState::Loading; app.browse_retry=Some(r.clone()); } match jobs.try_send(r){Ok(())=>app.busy=true,Err(error)=>{app.request_failed(&error.into_inner());app.note="Command queue is full; wait for the current request.".into();}}}
+                    if let Some(r) = request { app.dispatch(&jobs, r); }
 
                 }
                 Some((r,result))=responses.recv()=>{
@@ -1860,7 +1910,13 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                     app.busy=false;
                     if let Request::Browse {kind,term,..}=&r && (kind!=&app.kind || term!=&app.query || !matches!(app.screen, Screen::Search | Screen::Library | Screen::Playlists)) {continue;}
                     if let Request::QueuePage {offset}=&r && (app.screen!=Screen::Queue || *offset!=app.queue_offset) {continue;}
-                    match result {Ok(v)=>{if let Err(e)=app.accept(&r,v){app.note=e.to_string();}
+                    match result {Ok(v)=>{
+                    if let Err(e)=app.accept(&r,v) {
+                        app.request_failed(&r);
+                        app.note=e.to_string();
+                    } else if matches!(r, Request::Browse { .. }) && let Some(prefetch) = app.playlist_page(false) {
+                        app.dispatch(&jobs, prefetch);
+                    }
                     if app.screen==Screen::Queue && !matches!(r,Request::QueuePage{..}){let _=jobs.try_send(app.page_request());}},Err(e)=>{app.request_failed(&r);app.note=e.to_string();}}
 
                 }
@@ -1875,9 +1931,7 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                         let refresh = if reconnect && matches!(app.screen,Screen::Queue | Screen::Library | Screen::Playlists | Screen::Search) && (app.screen != Screen::Search || !app.query.is_empty()) {
                             Some(app.page_request())
                         } else { refresh };
-                        if let Some(r) = refresh && jobs.try_send(r).is_err() {
-                            app.note = "Command queue is full; reopen Queue to refresh.".into();
-                        }
+                        if let Some(r) = refresh { app.dispatch(&jobs, r); }
                     },
                     Err(_) => {
                         if app.connected {

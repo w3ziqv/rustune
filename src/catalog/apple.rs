@@ -1,5 +1,6 @@
 //! Fixed-origin Apple Music catalog and private-library search.
 mod playlist_write;
+use super::reads::{Budget, Reads};
 use crate::{
     artwork,
     cache::Cache,
@@ -14,17 +15,22 @@ use reqwest::{
 use rustune_core::public_apple::{application_token, read_private_secret};
 use serde_json::Value;
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::HashSet,
     fs,
     os::unix::fs::MetadataExt,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
-use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 use zeroize::Zeroizing;
 const MAX_BODY: usize = 2 * 1024 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Stamp {
+    device: u64,
+    changed: (i64, i64),
     inode: u64,
     mtime: i64,
     nanos: i64,
@@ -35,27 +41,49 @@ fn stamp(paths: &Paths) -> Option<Stamp> {
         .ok()
         .filter(|m| m.is_file())
         .map(|m| Stamp {
+            device: m.dev(),
+            changed: (m.ctime(), m.ctime_nsec()),
             inode: m.ino(),
             mtime: m.mtime(),
             nanos: m.mtime_nsec(),
             size: m.len(),
         })
 }
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Account {
+    generation: u64,
+}
 struct State {
     cache: Cache<String, Page>,
     stamp: Option<Stamp>,
-    storefront: Option<String>,
-    checked: Option<Instant>,
-    calls: VecDeque<Instant>,
-    blocked: Option<Instant>,
+    account: Account,
+    region: Option<(Instant, Option<String>)>,
+    budget: Budget,
 }
+
+#[derive(Clone)]
 pub struct AppleCatalog {
-    capacity: AtomicUsize,
-    entries: AtomicUsize,
+    capacity: Arc<AtomicUsize>,
+    entries: Arc<AtomicUsize>,
     client: Client,
     paths: Paths,
     origin: String,
-    state: Mutex<State>,
+    state: Arc<Mutex<State>>,
+    pages: Arc<Reads<String, Page>>,
+    regions: Arc<Reads<Account, Option<String>>>,
+    slots: Arc<Semaphore>,
+    writes: Arc<tokio::sync::Mutex<()>>,
+}
+
+struct MusicPage {
+    key: String,
+    kind: String,
+    term: String,
+    offset: usize,
+    size: usize,
+    max_results: usize,
+    account: Option<Account>,
+    storefront: String,
 }
 impl AppleCatalog {
     pub fn new(paths: Paths) -> Result<Self> {
@@ -66,19 +94,24 @@ impl AppleCatalog {
             .build()
             .map_err(|_| anyhow!("Cannot initialize Apple Music search"))?;
         Ok(Self {
-            capacity: AtomicUsize::new(8),
-            entries: AtomicUsize::new(0),
+            capacity: Arc::new(AtomicUsize::new(8)),
+            entries: Arc::new(AtomicUsize::new(0)),
             client,
             paths,
             origin: "https://api.music.apple.com".into(),
-            state: Mutex::new(State {
+            state: Arc::new(Mutex::new(State {
                 cache: Cache::new(8),
                 stamp: None,
-                storefront: None,
-                checked: None,
-                calls: VecDeque::new(),
-                blocked: None,
-            }),
+                account: Account {
+                    generation: fastrand::u64(..),
+                },
+                region: None,
+                budget: Budget::default(),
+            })),
+            pages: Arc::new(Reads::new()),
+            regions: Arc::new(Reads::new()),
+            slots: Arc::new(Semaphore::new(2)),
+            writes: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
     #[cfg(test)]
@@ -125,37 +158,88 @@ impl AppleCatalog {
         }
         Ok(headers)
     }
+    pub(super) fn account_generation(&self) -> Option<u64> {
+        self.account().map(|account| account.generation)
+    }
+
+    fn account(&self) -> Option<Account> {
+        let mut state = self.state.lock().expect("Apple catalog state");
+        let current = stamp(&self.paths);
+        if current != state.stamp {
+            state.stamp = current;
+            state.account.generation = state.account.generation.wrapping_add(1);
+            state.region = None;
+            self.clear_cache(&mut state);
+        }
+        current.map(|_| state.account)
+    }
+
+    fn clear_cache(&self, state: &mut State) {
+        state.cache = Cache::new(self.capacity.load(Ordering::Relaxed));
+        self.entries.store(0, Ordering::Relaxed);
+    }
+
+    fn check_account(&self, expected: Option<Account>) -> Result<()> {
+        if let Some(expected) = expected {
+            ensure!(
+                self.account() == Some(expected),
+                "Account credentials changed; restart the library search"
+            );
+        }
+        Ok(())
+    }
+
+    async fn account_region(&self, account: Account) -> Result<Option<String>> {
+        let catalog = self.clone();
+        let region = self
+            .regions
+            .read(account, async move {
+                catalog.check_account(Some(account))?;
+                if let Some((checked, region)) =
+                    &catalog.state.lock().expect("Apple catalog state").region
+                    && checked.elapsed() <= Duration::from_secs(300)
+                {
+                    return Ok(region.clone());
+                }
+                let response = catalog.get("me/storefront", &[], Some(account)).await;
+                let region = response.ok().and_then(|value| {
+                    let region = value["data"][0]["id"].as_str()?;
+                    (region.len() == 2 && region.bytes().all(|b| b.is_ascii_alphabetic()))
+                        .then(|| region.to_ascii_lowercase())
+                });
+                catalog.check_account(Some(account))?;
+                catalog.state.lock().expect("Apple catalog state").region =
+                    Some((Instant::now(), region.clone()));
+                Ok(region)
+            })
+            .await?;
+        self.check_account(Some(account))?;
+        Ok(region)
+    }
+
     async fn get(
         &self,
         path: &str,
         params: &[(&str, String)],
-        private: bool,
-        state: &mut State,
+        account: Option<Account>,
     ) -> Result<Value> {
-        let now = Instant::now();
-        if let Some(until) = state.blocked.filter(|v| *v > now) {
-            return Err(anyhow!(
-                "Apple Music search rate limit; retry in {} seconds",
-                until.duration_since(now).as_secs() + 1
-            ));
-        }
-        while state
-            .calls
-            .front()
-            .is_some_and(|v| now.duration_since(*v) >= Duration::from_secs(60))
-        {
-            state.calls.pop_front();
-        }
-        ensure!(
-            state.calls.len() < 20,
-            "Apple Music search request limit; retry in a minute"
-        );
-        let headers = self.headers(private).await?;
+        let _slot = self
+            .slots
+            .acquire()
+            .await
+            .expect("open Apple catalog slots");
+        self.check_account(account)?;
+        let headers = self.headers(account.is_some()).await?;
+        self.check_account(account)?;
         let mut url = Url::parse(&format!("{}/v1/{path}", self.origin))
             .map_err(|_| anyhow!("Invalid fixed Apple search origin"))?;
         url.query_pairs_mut()
             .extend_pairs(params.iter().map(|(k, v)| (*k, v.as_str())));
-        state.calls.push_back(now);
+        self.state
+            .lock()
+            .expect("Apple catalog state")
+            .budget
+            .reserve("Apple Music search")?;
         let mut response = self
             .client
             .get(url)
@@ -171,12 +255,16 @@ impl AppleCatalog {
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(60)
                 .clamp(1, 3600);
-            state.blocked = Some(Instant::now() + Duration::from_secs(seconds));
+            self.state
+                .lock()
+                .expect("Apple catalog state")
+                .budget
+                .block(seconds);
             return Err(anyhow!(
                 "Apple Music search rate limit; retry in {seconds} seconds"
             ));
         }
-        if private {
+        if account.is_some() {
             ensure!(
                 response.status().is_success(),
                 "Personal library/account access rejected (HTTP {}); check your Music User Token",
@@ -242,18 +330,34 @@ impl AppleCatalog {
             term.len() <= 512 && !term.chars().any(char::is_control),
             "Invalid search text"
         );
+        let private = super::playlist::private_kind(kind);
+        let account = self.account();
         let (pinned_region, raw_offset) = match next {
             None => (None, "0"),
-            Some(cursor) => match cursor.split_once(':') {
-                Some((region, offset)) => {
+            Some(cursor) => {
+                let (region, offset) = cursor
+                    .split_once(':')
+                    .ok_or_else(|| anyhow!("Invalid Apple Music page cursor"))?;
+                ensure!(
+                    region.len() == 2 && region.bytes().all(|b| b.is_ascii_alphabetic()),
+                    "Invalid Apple Music page region"
+                );
+                if private {
+                    let (generation, offset) = offset.split_once(':').ok_or_else(|| {
+                        anyhow!("Private page expired; restart the library search")
+                    })?;
                     ensure!(
-                        region.len() == 2 && region.bytes().all(|b| b.is_ascii_alphabetic()),
-                        "Invalid Apple Music page region"
+                        u64::from_str_radix(generation, 16)
+                            .ok()
+                            .zip(account)
+                            .is_some_and(|(g, a)| g == a.generation),
+                        "Private page expired; restart the library search"
                     );
                     (Some(region), offset)
+                } else {
+                    (Some(region), offset)
                 }
-                None => (None, cursor),
-            },
+            }
         };
         ensure!(
             !raw_offset.is_empty()
@@ -270,63 +374,108 @@ impl AppleCatalog {
             crate::queue::MAX_QUEUE
         };
         ensure!(offset < max_results, "Catalog offset exceeds limit");
-        let private = super::playlist::private_kind(kind);
         ensure!(
             !matches!(kind, "recent" | "search:playlists"),
             "Recent history and playlist search are not implemented; browse Playlists"
         );
-        let size = limits.page_size.clamp(1, 25);
-        let mut state = self.state.lock().await;
-        let current = stamp(&self.paths);
-        if current != state.stamp {
-            state.cache = Cache::new(limits.cache_entries.min(32));
-            state.storefront = None;
-            state.checked = None;
-            state.stamp = current;
-        }
-        if current.is_some()
-            && state
-                .checked
-                .is_none_or(|t| t.elapsed() > Duration::from_secs(300))
-        {
-            let storefront = self.get("me/storefront", &[], true, &mut state).await;
-            state.storefront = storefront
-                .ok()
-                .and_then(|v| {
-                    v["data"]
-                        .as_array()
-                        .and_then(|a| a.first())
-                        .and_then(|v| v["id"].as_str())
-                        .map(str::to_owned)
-                })
-                .filter(|v| v.len() == 2 && v.bytes().all(|b| b.is_ascii_alphabetic()));
-            state.checked = Some(Instant::now());
-        }
+        let size = if kind.starts_with("open:library-playlists:") {
+            25
+        } else {
+            limits.page_size.clamp(1, 25)
+        };
+        let region = match account.filter(|_| private || pinned_region.is_none()) {
+            Some(account) => match self.account_region(account).await {
+                Ok(region) => region,
+                Err(error) if private => return Err(error),
+                Err(_) => None,
+            },
+            None => None,
+        };
         if private {
             ensure!(
-                current.is_some() && state.storefront.is_some(),
+                region.is_some(),
                 "Personal library requires an accepted Music User Token; use Login in Settings"
             );
-        }
-        if private && let Some(region) = pinned_region {
-            ensure!(
-                state
-                    .storefront
-                    .as_deref()
-                    .is_some_and(|v| v.eq_ignore_ascii_case(region)),
-                "Account region changed; restart the library search"
-            );
+            if let Some(pinned) = pinned_region {
+                ensure!(
+                    region
+                        .as_deref()
+                        .is_some_and(|r| r.eq_ignore_ascii_case(pinned)),
+                    "Account region changed; restart the library search"
+                );
+            }
         }
         let storefront = pinned_region
             .map(str::to_ascii_lowercase)
-            .or_else(|| state.storefront.clone())
+            .or_else(|| region.clone())
             .unwrap_or_else(|| country.to_ascii_lowercase());
+        let region_source = if region.as_deref() == Some(storefront.as_str()) {
+            "account region"
+        } else if pinned_region.is_some() {
+            "pinned region"
+        } else {
+            "selected region"
+        };
+        let account = account.filter(|_| private);
+        let term = term.trim().to_owned();
         let key = format!(
-            "{storefront}\0{kind}\0{}\0{offset}\0{size}",
-            term.trim().to_lowercase()
+            "music\0{storefront}\0{kind}\0{term}\0{offset}\0{size}\0{}",
+            account.map_or(0, |a| a.generation)
         );
+        let catalog = self.clone();
+        let query = MusicPage {
+            key: key.clone(),
+            kind: kind.to_owned(),
+            term,
+            offset,
+            size,
+            max_results,
+            account,
+            storefront,
+        };
+        let mut page = self
+            .pages
+            .read(key, async move { catalog.fetch_page(query).await })
+            .await?;
+        self.check_account(account)?;
+        page.context = Some(format!(
+            "{} · {} · {region_source}",
+            if private {
+                "My library"
+            } else {
+                "Apple Music catalog"
+            },
+            page.storefront
+                .as_deref()
+                .unwrap_or(country)
+                .to_ascii_uppercase(),
+        ));
+        Ok(page)
+    }
+
+    async fn fetch_page(&self, query: MusicPage) -> Result<Page> {
+        let MusicPage {
+            key,
+            kind,
+            term,
+            offset,
+            size,
+            max_results,
+            account,
+            storefront,
+        } = query;
+        let kind = kind.as_str();
+        let private = account.is_some();
         let mutable_playlist = kind == "playlists" || kind.starts_with("open:library-playlists:");
-        if !mutable_playlist && let Some(page) = state.cache.get(&key) {
+        self.check_account(account)?;
+        if !mutable_playlist
+            && let Some(page) = self
+                .state
+                .lock()
+                .expect("Apple catalog state")
+                .cache
+                .get(&key)
+        {
             return Ok(page.clone());
         }
         let mut params = vec![("limit", size.to_string()), ("offset", offset.to_string())];
@@ -387,13 +536,7 @@ impl AppleCatalog {
             }
             _ => return Err(anyhow!("Unsupported Apple Music search category")),
         };
-        let response = self.get(&path, &params, private, &mut state).await?;
-        if private {
-            ensure!(
-                stamp(&self.paths) == state.stamp,
-                "Account credentials changed while searching; retry"
-            );
-        }
+        let response = self.get(&path, &params, account).await?;
         let result = if search {
             &response["results"][wanted]
         } else {
@@ -431,8 +574,12 @@ impl AppleCatalog {
             track.storefront = storefront.clone();
         }
         if search {
-            items.sort_by_key(|track| std::cmp::Reverse(rank(term, track)));
+            items.sort_by_key(|track| std::cmp::Reverse(rank(&term, track)));
         }
+        let cursor = |offset: usize| match account {
+            Some(account) => format!("{:016x}:{offset}", account.generation),
+            None => offset.to_string(),
+        };
         let page = Page {
             skipped: if search {
                 Vec::new()
@@ -447,41 +594,24 @@ impl AppleCatalog {
                     .collect()
             },
             total: result["meta"]["total"].as_u64().map(|n| n as usize),
-            previous: (offset > 0).then(|| offset.saturating_sub(size).to_string()),
+            previous: (offset > 0).then(|| cursor(offset.saturating_sub(size))),
             storefront: Some(storefront.clone()),
             items,
             next: (result.get("next").and_then(Value::as_str).is_some()
                 && (!search || offset + size < max_results))
-                .then(|| (offset + size).to_string()),
-            context: Some(format!(
-                "{} · {}{}",
-                if private {
-                    "My library"
-                } else {
-                    "Apple Music catalog"
-                },
-                storefront.to_uppercase(),
-                if state
-                    .storefront
-                    .as_deref()
-                    .is_some_and(|v| v.eq_ignore_ascii_case(&storefront))
-                {
-                    " · account region"
-                } else if pinned_region.is_some() {
-                    " · pinned region"
-                } else {
-                    " · selected region"
-                }
-            )),
+                .then(|| cursor(offset + size)),
+            context: None,
         };
+        self.check_account(account)?;
+        let mut state = self.state.lock().expect("Apple catalog state");
         if state.cache.capacity != self.capacity.load(Ordering::Relaxed) {
-            state.cache = Cache::new(self.capacity.load(Ordering::Relaxed));
+            self.clear_cache(&mut state);
         }
         if !mutable_playlist {
             state.cache.insert(key, page.clone());
+            self.entries
+                .store(state.cache.entries.len(), Ordering::Relaxed);
         }
-        self.entries
-            .store(state.cache.entries.len(), Ordering::Relaxed);
         Ok(page)
     }
 }

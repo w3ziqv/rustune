@@ -5,6 +5,8 @@ pub mod playlist;
 #[cfg(test)]
 pub(crate) mod playlist_tests;
 pub mod playlist_write;
+mod reads;
+use reads::{Budget, Reads};
 #[cfg(test)]
 pub(crate) mod playlist_write_tests;
 use crate::{
@@ -16,26 +18,40 @@ use crate::{
 use anyhow::{Result, ensure};
 use serde_json::Value;
 use std::{
-    collections::VecDeque,
-    sync::atomic::{AtomicUsize, Ordering},
-    time::{Duration, Instant, SystemTime},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, SystemTime},
 };
-use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 const MAX_BODY: usize = 512 * 1024;
 const MAX_RESULTS: usize = 200;
 const PERSONAL_UNAVAILABLE: &str = "Personal library/playlists authorization is not implemented. A locally saved token has not been checked against Apple. Public search works without that token.";
 struct State {
     cache: Cache<String, Page>,
-    calls: VecDeque<Instant>,
-    blocked_until: Option<Instant>,
+    budget: Budget,
 }
+#[derive(Clone)]
 pub struct Catalog {
     apple: Option<apple::AppleCatalog>,
     client: reqwest::Client,
     origin: String,
-    state: Mutex<State>,
-    capacity: AtomicUsize,
-    entries: AtomicUsize,
+    state: Arc<Mutex<State>>,
+    capacity: Arc<AtomicUsize>,
+    entries: Arc<AtomicUsize>,
+    reads: Arc<Reads<String, Page>>,
+    slots: Arc<Semaphore>,
+}
+struct ItunesQuery {
+    url: reqwest::Url,
+    key: String,
+    album: bool,
+    paginated: bool,
+    country: String,
+    wanted: &'static str,
+    offset: usize,
+    size: usize,
 }
 impl Catalog {
     pub fn new(paths: &crate::config::Paths) -> Result<Self> {
@@ -57,19 +73,24 @@ impl Catalog {
                 .build()
                 .map_err(|_| anyhow::anyhow!("Could not initialize the public catalog client"))?,
             origin: origin.into(),
-            state: Mutex::new(State {
+            state: Arc::new(Mutex::new(State {
                 cache: Cache::new(8),
-                calls: VecDeque::new(),
-                blocked_until: None,
-            }),
-            capacity: AtomicUsize::new(8),
-            entries: AtomicUsize::new(0),
+                budget: Budget::default(),
+            })),
+            capacity: Arc::new(AtomicUsize::new(8)),
+            entries: Arc::new(AtomicUsize::new(0)),
+            reads: Arc::new(Reads::new()),
+            slots: Arc::new(Semaphore::new(2)),
         })
     }
     #[cfg(test)]
     pub(crate) fn with_origin(origin: &str) -> Self {
         Self::create(origin).unwrap()
     }
+    pub(crate) fn account_generation(&self) -> Option<u64> {
+        self.apple.as_ref()?.account_generation()
+    }
+
     pub fn cache_entries(&self) -> usize {
         self.entries.load(Ordering::Relaxed)
             + self
@@ -99,8 +120,11 @@ impl Catalog {
     ) -> Result<Page> {
         let Some(apple) = &self.apple else {
             if let Some(cursor) = next.filter(|c| c.contains(':')) {
-                let (provider, region, offset) = parse_cursor(cursor)?;
-                ensure!(provider == "itunes", "Apple Music catalog unavailable");
+                let (provider, region, generation, offset) = parse_cursor(cursor)?;
+                ensure!(
+                    provider == "itunes" && generation.is_none(),
+                    "Apple Music catalog unavailable"
+                );
                 return pin_page(
                     self.browse_itunes(kind, term, Some(offset), region, limits)
                         .await?,
@@ -111,17 +135,19 @@ impl Catalog {
         };
         let private = playlist::private_kind(kind);
         if let Some(cursor) = next {
-            let (provider, region, offset) = parse_cursor(cursor)?;
+            let (provider, region, generation, offset) = parse_cursor(cursor)?;
+            ensure!(
+                generation.is_some() == private,
+                "Catalog page expired; restart the search"
+            );
             return match provider {
                 "music" => {
+                    let cursor = match generation {
+                        Some(generation) => format!("{region}:{generation}:{offset}"),
+                        None => format!("{region}:{offset}"),
+                    };
                     let page = apple
-                        .browse(
-                            kind,
-                            term,
-                            Some(&format!("{region}:{offset}")),
-                            region,
-                            limits,
-                        )
+                        .browse(kind, term, Some(&cursor), region, limits)
                         .await?;
                     pin_page(page, "music")
                 }
@@ -211,33 +237,14 @@ impl Catalog {
             );
         }
         self.set_capacity(limits.cache_entries);
+        let album = kind.starts_with("open:albums:");
+        let paginated = next.is_some();
         let key = format!(
-            "{}\0{kind}\0{term}\0{offset}\0{size}",
-            country.to_ascii_uppercase()
+            "itunes\0{}\0{kind}\0{}\0{offset}\0{size}\0{}",
+            country.to_ascii_uppercase(),
+            term.trim(),
+            album && paginated
         );
-        let mut state = self.state.lock().await;
-        if let Some(page) = state.cache.get(&key) {
-            return Ok(page.clone());
-        }
-        let now = Instant::now();
-        if let Some(until) = state.blocked_until.filter(|until| *until > now) {
-            anyhow::bail!(
-                "Apple catalog rate limit; retry in {} seconds",
-                until.duration_since(now).as_secs() + 1
-            );
-        }
-        while state
-            .calls
-            .front()
-            .is_some_and(|time| now.duration_since(*time) >= Duration::from_secs(60))
-        {
-            state.calls.pop_front();
-        }
-        ensure!(
-            state.calls.len() < 20,
-            "Apple catalog request limit reached; retry in a minute"
-        );
-        state.calls.push_back(now);
         let requested = if kind.starts_with("open:albums:") {
             MAX_RESULTS
         } else {
@@ -258,6 +265,42 @@ impl Catalog {
             .map_err(|_| anyhow::anyhow!("Invalid catalog endpoint"))?;
         url.query_pairs_mut()
             .extend_pairs(params.iter().map(|(k, v)| (*k, v.as_str())));
+        let query = ItunesQuery {
+            url,
+            key: key.clone(),
+            album,
+            paginated,
+            country: country.to_ascii_lowercase(),
+            wanted,
+            offset,
+            size,
+        };
+        let catalog = self.clone();
+        self.reads
+            .read(key, async move { catalog.fetch_itunes(query).await })
+            .await
+    }
+
+    async fn fetch_itunes(&self, query: ItunesQuery) -> Result<Page> {
+        let ItunesQuery {
+            url,
+            key,
+            album,
+            paginated,
+            country,
+            wanted,
+            offset,
+            size,
+        } = query;
+        if let Some(page) = self.state.lock().expect("iTunes state").cache.get(&key) {
+            return Ok(page.clone());
+        }
+        let _slot = self.slots.acquire().await.expect("open iTunes slots");
+        self.state
+            .lock()
+            .expect("iTunes state")
+            .budget
+            .reserve("Apple catalog")?;
         let mut response = self.client.get(url).send().await.map_err(|_| {
             anyhow::anyhow!(
                 "Public Apple catalog could not be reached; check the network and retry"
@@ -279,7 +322,7 @@ impl Catalog {
                 })
                 .unwrap_or(60)
                 .clamp(1, 3600);
-            state.blocked_until = Some(Instant::now() + Duration::from_secs(delay));
+            self.state.lock().expect("iTunes state").budget.block(delay);
             anyhow::bail!("Apple catalog rate limit; retry in {delay} seconds");
         }
         ensure!(
@@ -323,7 +366,7 @@ impl Catalog {
         for track in &mut items {
             track.storefront = country.to_ascii_lowercase();
         }
-        if kind.starts_with("open:albums:") && next.is_some() {
+        if album && paginated {
             let expected = records
                 .iter()
                 .find_map(|r| r["trackCount"].as_u64())
@@ -344,7 +387,7 @@ impl Catalog {
                 country.to_ascii_uppercase()
             )),
             skipped: Vec::new(),
-            total: if kind.starts_with("open:albums:") {
+            total: if album {
                 records
                     .iter()
                     .find_map(|r| r["trackCount"].as_u64())
@@ -357,6 +400,7 @@ impl Catalog {
             previous: (offset > 0).then(|| offset.saturating_sub(size).to_string()),
             storefront: Some(country.to_ascii_lowercase()),
         };
+        let mut state = self.state.lock().expect("iTunes state");
         let capacity = self.capacity.load(Ordering::Relaxed);
         if state.cache.capacity != capacity {
             state.cache = Cache::new(capacity);
@@ -376,15 +420,22 @@ fn clean(value: Option<&Value>, max: usize) -> String {
         .take(max)
         .collect()
 }
-fn parse_cursor(cursor: &str) -> Result<(&str, &str, &str)> {
-    ensure!(cursor.len() <= 24, "Invalid catalog page cursor");
+fn parse_cursor(cursor: &str) -> Result<(&str, &str, Option<&str>, &str)> {
+    ensure!(cursor.len() <= 32, "Invalid catalog page cursor");
     let mut parts = cursor.split(':');
     let provider = parts.next().unwrap_or("");
     let region = parts.next().unwrap_or("");
-    let offset = parts.next().unwrap_or("");
+    let first = parts.next().unwrap_or("");
+    let (generation, offset) = match parts.next() {
+        Some(offset) => (Some(first), offset),
+        None => (None, first),
+    };
     ensure!(
         matches!(provider, "music" | "itunes")
             && parts.next().is_none()
+            && generation.is_none_or(|g| provider == "music"
+                && g.len() == 16
+                && g.bytes().all(|b| b.is_ascii_hexdigit()))
             && region.len() == 2
             && region.bytes().all(|b| b.is_ascii_alphabetic())
             && !offset.is_empty()
@@ -395,7 +446,7 @@ fn parse_cursor(cursor: &str) -> Result<(&str, &str, &str)> {
                 .is_ok_and(|v| v < crate::queue::MAX_QUEUE),
         "Invalid catalog page cursor"
     );
-    Ok((provider, region, offset))
+    Ok((provider, region, generation, offset))
 }
 fn pin_page(mut page: Page, provider: &str) -> Result<Page> {
     let region = page

@@ -36,6 +36,10 @@ impl App {
                     } else {
                         self.selected.saturating_sub(1)
                     };
+                    self.update_playlist_top();
+                    if down {
+                        return (false, self.playlist_page(false));
+                    }
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {

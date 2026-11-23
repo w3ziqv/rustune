@@ -123,20 +123,35 @@ impl Clients {
             }
             Request::Browse { kind, term, next } => {
                 let status = self.updates.borrow().clone();
-                let page = self
-                    .catalog
-                    .browse(
-                        &kind,
-                        &term,
-                        next.as_deref(),
-                        &status.catalog_country,
-                        status.profile.limits(),
-                    )
-                    .await;
-                if page.is_ok() && kind.starts_with("search:") && !term.trim().is_empty() {
-                    let _ = send(&self.tx, Request::RecordSearch(term.trim().into())).await;
+                let private = crate::catalog::playlist::private_kind(&kind);
+                let account = private.then(|| self.catalog.account_generation()).flatten();
+                let browse = async {
+                    let page = self
+                        .catalog
+                        .browse(
+                            &kind,
+                            &term,
+                            next.as_deref(),
+                            &status.catalog_country,
+                            status.profile.limits(),
+                        )
+                        .await?;
+                    if kind.starts_with("search:") && !term.trim().is_empty() {
+                        let _ = send(&self.tx, Request::RecordSearch(term.trim().into())).await;
+                    }
+                    anyhow::ensure!(
+                        !private
+                            || (account.is_some() && self.catalog.account_generation() == account),
+                        "Account credentials changed; restart the library search"
+                    );
+                    Ok(serde_json::to_value(page)?)
+                };
+                let mut input = [0];
+                tokio::select! {
+                    biased;
+                    _ = socket.read(&mut input) => return Ok(()),
+                    result = browse => result,
                 }
-                page.and_then(|p| Ok(serde_json::to_value(p)?))
             }
             other => send(&self.tx, other).await,
         };

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.5.0 (local candidate)
+
+- Apple Music and iTunes allow two concurrent reads each. Identical requests share a read, and disconnecting the last caller cancels the fetch.
+- Private page cursors expire when the account token changes.
+- Playlists scroll continuously through a 25-track window. The next page loads in advance, with source order, duplicate occurrences and retry preserved.
+
 ## v0.4.0
 
 - Confirmed native seeks, occurrence-checked MPRIS SetPosition and navigation that preserves pause and stop.

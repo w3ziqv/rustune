@@ -330,7 +330,7 @@ fn playlists_open_whole_context_and_queue_save_requires_name_and_confirmation() 
     assert!(matches!(request,Request::Browse{ref kind,..} if kind=="playlists"));
     app.accept(&request,serde_json::json!({"items":[{"id":"p.fixture","kind":"library-playlists","title":"Fixture","provider":"music","storefront":"pl","can_edit":true}],"next":null,"storefront":"pl","context":"Library"})).unwrap();
     let open = press(&mut app, KeyCode::Enter).unwrap();
-    assert!(matches!(open,Request::Browse{next:Some(ref cursor),..} if cursor=="music:pl:0"));
+    assert!(matches!(open, Request::Browse { next: None, .. }));
     assert!(app.playlist_view.is_some());
     press(&mut app, KeyCode::Char('a'));
     let play = press(&mut app, KeyCode::Enter).unwrap();
@@ -682,4 +682,111 @@ async fn audio_information_shows_local_checks_without_claiming_playback() {
     assert!(app.diagnostics.is_none());
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.screen, Screen::Settings);
+}
+
+#[test]
+fn playlist_window_prefetches_and_preserves_duplicate_occurrences() {
+    let mut app = App::new(Config::default());
+    app.viewport = Size::new(120, 42);
+    app.screen = Screen::Playlists;
+    app.kind = "open:library-playlists:p.fixture".into();
+    app.playlist_view = Some(crate::catalog::playlist::PlaylistRef {
+        id: "p.fixture".into(),
+        storefront: "pl".into(),
+        title: "Fixture".into(),
+        can_edit: false,
+    });
+    let payload = |start, end, next: Option<&str>| {
+        let items = (start..end)
+            .map(|i| {
+                let id = match i {
+                    25 => 24,
+                    50 => 49,
+                    _ => i,
+                };
+                serde_json::json!({"id":id.to_string(),"kind":"library-songs","source_index":i})
+            })
+            .collect::<Vec<_>>();
+        serde_json::json!({"items":items,"next":next,"storefront":"pl"})
+    };
+    let initial = app.page_request();
+    app.accept(
+        &initial,
+        payload(0, 25, Some("music:pl:1234567890abcdef:25")),
+    )
+    .unwrap();
+    let (jobs, mut work) = mpsc::channel(1);
+    for _ in 0..19 {
+        assert!(press(&mut app, KeyCode::Down).is_none());
+    }
+    let second = press(&mut app, KeyCode::Down).expect("prefetch before last row");
+    app.dispatch(&jobs, second.clone());
+    assert!(work.try_recv().is_ok());
+    for _ in 20..24 {
+        assert!(press(&mut app, KeyCode::Down).is_none());
+    }
+    app.request_failed(&second);
+    assert_eq!(app.selected, 24);
+    assert_eq!(app.playlist_range(30), 0..25);
+    assert!(press(&mut app, KeyCode::Down).is_none());
+    let retry = press(&mut app, KeyCode::Char('R')).unwrap();
+    assert_eq!(
+        serde_json::to_value(&retry).unwrap(),
+        serde_json::to_value(&second).unwrap()
+    );
+    app.accept(
+        &retry,
+        payload(25, 50, Some("music:pl:1234567890abcdef:50")),
+    )
+    .unwrap();
+    assert_eq!(app.playlist_range(30), 0..25);
+    assert!(press(&mut app, KeyCode::Down).is_none());
+    assert_eq!(app.playlist_range(30), 1..26);
+    assert_eq!(app.items[24].id, app.items[25].id);
+    assert!(press(&mut app, KeyCode::Down).is_none());
+    assert_eq!(app.playlist_range(30), 2..27);
+
+    for _ in 26..44 {
+        assert!(press(&mut app, KeyCode::Down).is_none());
+    }
+    let third = press(&mut app, KeyCode::Down).expect("prefetch third page");
+    app.dispatch(&jobs, third.clone());
+    assert!(work.try_recv().is_ok());
+    for _ in 45..49 {
+        assert!(press(&mut app, KeyCode::Down).is_none());
+    }
+    app.accept(&third, payload(50, 56, None)).unwrap();
+    assert_eq!(app.playlist_range(30), 25..50);
+    assert!(press(&mut app, KeyCode::Down).is_none());
+    assert_eq!(app.playlist_range(30), 26..51);
+    assert_eq!(app.items[49].id, app.items[50].id);
+    let selected = app.song_request(app.items[app.selected].clone(), 2);
+    assert!(matches!(
+        selected,
+        Request::Playlist {
+            action: ipc::ContextAction::PlayFromPosition {
+                source_index: 50,
+                ..
+            },
+            ..
+        }
+    ));
+    for _ in 0..8 {
+        assert!(press(&mut app, KeyCode::Down).is_none());
+    }
+    assert_eq!(app.selected, 55);
+    assert_eq!(app.playlist_range(30), 31..56);
+    for _ in 31..55 {
+        press(&mut app, KeyCode::Up);
+    }
+    assert_eq!(app.playlist_range(30), 31..56);
+    press(&mut app, KeyCode::Up);
+    assert_eq!(app.playlist_range(30), 30..55);
+    for _ in 0..31 {
+        press(&mut app, KeyCode::Up);
+    }
+    assert_eq!(app.selected, 0);
+    assert_eq!(app.playlist_range(30), 0..25);
+    app.accept(&initial, payload(0, 7, None)).unwrap();
+    assert_eq!(app.playlist_range(30), 0..7);
 }
