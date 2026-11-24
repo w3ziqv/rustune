@@ -1,6 +1,11 @@
 # Changelog
 
-## v0.5.0 (local candidate)
+## v0.5.1
+
+- One-command, checksum-verified installation for x86_64 GNU/Linux with glibc 2.39 or newer.
+- Managed updates switch the matching Rustune and audio helper executables together and retain the previous pair.
+
+## v0.5.0
 
 - Apple Music and iTunes allow two concurrent reads each. Identical requests share a read, and disconnecting the last caller cancels the fetch.
 - Private page cursors expire when the account token changes.

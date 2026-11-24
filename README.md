@@ -39,20 +39,23 @@ Screenshots and their validation context are recorded in the [v0.3 screenshot re
 
 ## Installation
 
-Linux, stable Rust **1.99.1** (minimum 1.99), a UTF-8 terminal and D-Bus. Install native build dependencies following the [installation guide](docs/installation.md), then:
+Install the v0.5.1 release on x86_64 GNU/Linux with glibc 2.39 or newer.
+The command needs Bash, curl and Python 3.
 
-```sh
-scripts/build-slim-audio.sh
-install -Dm755 target/release/rustune ~/.local/bin/rustune
-install -Dm755 target/release/rustune-audio ~/.local/bin/rustune-audio
-rustune init
-rustune login
-rustune
+```bash
+bash -c 'set -eu
+work=$(mktemp -d)
+cleanup() { rm -f -- "$work/install.py"; rmdir -- "$work"; }
+trap cleanup EXIT
+curl --disable --fail --silent --show-error --location --proto "=https" --proto-redir "=https" --connect-timeout 15 --max-time 60 --max-filesize 65536 \
+  https://raw.githubusercontent.com/w3ziqv/rustune/v0.5.1/scripts/install.py -o "$work/install.py"
+python3 "$work/install.py"'
 ```
 
-Run `rustune doctor` to check the installed pair, token storage, CDM, service and session D-Bus. Use `rustune doctor --json` for scripts or open **Settings → Audio information** in the TUI.
-
-Keep both executables together. The build script verifies and builds a private minimal FFmpeg; it does not replace system libraries. A standard `cargo build --locked --release` can instead use system FFmpeg 9 development libraries.
+The installer verifies the release archive and installs both executables in
+`~/.local/bin`. Run `~/.local/bin/rustune doctor` to check the installed pair.
+For runtime dependencies, manual-install migration and builds from source, see
+the [installation guide](docs/installation.md).
 
 Place your compatible signed CDM at `~/.cache/rustune/drm/libwidevinecdm.so`, with directory mode `0700` and file mode `0600`. It is not redistributed. Enter your own Media User Token through the masked local prompt. Public application authorization is retrieved anonymously from Apple and cached privately; no signed-in browser session is read.
 

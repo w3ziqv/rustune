@@ -4,7 +4,7 @@ permissions:
   contents: read
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         toolchain: [stable, '1.99.1']
@@ -29,3 +29,9 @@ jobs:
         if: matrix.toolchain == 'stable'
       - run: cargo test --locked --features rustune-audio/slim-ffmpeg
       - run: cargo build --locked --release --workspace --features rustune-audio/slim-ffmpeg
+
+      - name: Exercise installer with packaged native binaries
+        run: |
+          scripts/package-release.sh target/release "$RUNNER_TEMP/rustune-dist"
+          asset=$(find "$RUNNER_TEMP/rustune-dist" -maxdepth 1 -name '*.tar.gz')
+          RUSTUNE_TEST_RELEASE_ARCHIVE="$asset" python3 -B scripts/test-install.py
