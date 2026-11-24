@@ -21,6 +21,9 @@ spec = importlib.util.spec_from_file_location("rustune_installer", script)
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
 release_archive = os.environ.get("RUSTUNE_TEST_RELEASE_ARCHIVE")
+pinned_release = os.environ.get("RUSTUNE_TEST_PINNED_SHA") == "1"
+if pinned_release and not release_archive:
+    raise SystemExit("RUSTUNE_TEST_PINNED_SHA=1 requires RUSTUNE_TEST_RELEASE_ARCHIVE.")
 
 
 class InstallerTest(unittest.TestCase):
@@ -72,9 +75,10 @@ class InstallerTest(unittest.TestCase):
                 archive.addfile(extra, io.BytesIO(b"X" * extra.size))
 
     def run_installer(self, digest=None):
-        checksum = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        if digest is None:
+            digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
         with (
-            patch.object(installer, "SHA256", checksum if digest is None else digest),
+            patch.object(installer, "SHA256", digest),
             redirect_stdout(io.StringIO()) as output,
             redirect_stderr(io.StringIO()) as error,
         ):
@@ -224,11 +228,150 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(self.installed(), old_bytes)
         self.assertEqual(list(old.parent.iterdir()), [old])
 
+    def test_sync_order_on_fresh_install(self):
+        events = []
+        sync_file = installer.sync_file
+        sync_directory = installer.sync_directory
+        replace = Path.replace
+
+        def file(path):
+            events.append(("file", path))
+            sync_file(path)
+
+        def directory(path):
+            events.append(("directory", path))
+            sync_directory(path)
+
+        def commit(pointer, target):
+            events.append(("commit", target))
+            return replace(pointer, target)
+
+        with (
+            patch.object(installer, "sync_file", side_effect=file),
+            patch.object(installer, "sync_directory", side_effect=directory),
+            patch.object(Path, "replace", new=commit),
+        ):
+            code, _, error = self.run_installer()
+        self.assertEqual(code, 0, error)
+
+        commit_index = events.index(("commit", self.current))
+        before, after = events[:commit_index], events[commit_index + 1:]
+        staged = [path for kind, path in before if kind == "file" and path.name in installer.PROGRAMS]
+        self.assertEqual({path.name for path in staged}, set(installer.PROGRAMS))
+        for path in staged:
+            self.assertLess(before.index(("file", path)), before.index(("directory", path.parent)))
+        for directory in (self.current.parent / "releases", self.current.parent, self.bin):
+            self.assertIn(("directory", directory), before)
+        self.assertEqual(after, [("directory", self.current.parent), ("directory", self.bin)])
+
+    def test_failed_sync_before_switch_preserves_active_pair(self):
+        self.assertEqual(self.run_installer()[0], 0)
+        old = self.current.resolve()
+        old_bytes = self.installed()
+        sync_file = installer.sync_file
+        sync_directory = installer.sync_directory
+
+        def fail_helper(path):
+            if path.name == "rustune-audio":
+                raise OSError("helper fsync failure")
+            sync_file(path)
+
+        def fail_releases(path):
+            if path == old.parent:
+                raise OSError("releases fsync failure")
+            sync_directory(path)
+
+        with patch.object(installer, "VERSION", "0.5.2"):
+            self.fixture()
+            for function, callback in (("sync_file", fail_helper), ("sync_directory", fail_releases)):
+                with self.subTest(function=function), patch.object(installer, function, side_effect=callback):
+                    code, _, error = self.run_installer()
+                    self.assertEqual(code, 1)
+                    self.assertIn("fsync failure", error)
+                    self.assertEqual(self.current.resolve(), old)
+                    self.assertEqual(self.installed(), old_bytes)
+                    self.assertEqual(list(old.parent.iterdir()), [old])
+
+    def test_failed_fresh_link_sync_removes_uncommitted_links(self):
+        sync_directory = installer.sync_directory
+
+        def fail_links(path):
+            if path == self.bin and (self.bin / "rustune").is_symlink():
+                raise OSError("public links fsync failure")
+            sync_directory(path)
+
+        with patch.object(installer, "sync_directory", side_effect=fail_links):
+            code, _, error = self.run_installer()
+        self.assertEqual(code, 1)
+        self.assertIn("public links fsync failure", error)
+        self.assertFalse(self.current.is_symlink())
+        self.assertFalse(any((self.bin / name).is_symlink() for name in installer.PROGRAMS))
+        self.assertEqual(list((self.current.parent / "releases").iterdir()), [])
+        self.assertEqual(self.run_installer()[0], 0)
+
+    def test_failed_sync_after_switch_keeps_new_pair_and_retry_confirms(self):
+        self.assertEqual(self.run_installer()[0], 0)
+        old = self.current.resolve()
+        old_bytes = self.installed()
+        sync_directory = installer.sync_directory
+        attempts_after_switch = []
+
+        def fail_after_commit(path):
+            if self.current.resolve() != old:
+                attempts_after_switch.append(path)
+                if path == self.current.parent:
+                    raise OSError("current fsync failure")
+            sync_directory(path)
+
+        with patch.object(installer, "VERSION", "0.5.2"):
+            self.fixture()
+            with patch.object(installer, "sync_directory", side_effect=fail_after_commit):
+                code, output, error = self.run_installer()
+            self.assertEqual(code, 2)
+            self.assertEqual(output, "")
+            self.assertIn("is active", error)
+            self.assertIn("could not confirm it will persist", error)
+            self.assertIn("current fsync failure", error)
+            self.assertEqual(attempts_after_switch, [self.current.parent, self.bin])
+            new = self.current.resolve()
+            self.assertNotEqual(old, new)
+            self.assertNotEqual(self.installed(), old_bytes)
+            self.assertEqual(tuple((old / name).read_bytes() for name in installer.PROGRAMS), old_bytes)
+            code, _, error = self.run_installer()
+            self.assertEqual(code, 0, error)
+            self.assertEqual(self.current.resolve(), new)
+            self.assertEqual(set(new.parent.iterdir()), {old, new})
+
+    def test_documented_source_install_keeps_managed_links(self):
+        self.assertEqual(self.run_installer()[0], 0)
+        old = self.current.resolve()
+        old_bytes = self.installed()
+        repo = self.root / "source"
+        target = repo / "target/release"
+        target.mkdir(parents=True)
+        for name, content in zip(installer.PROGRAMS, old_bytes):
+            (target / name).write_bytes(content)
+        scripts = repo / "scripts"
+        scripts.mkdir()
+        frontend = scripts / "build-slim-audio.sh"
+        frontend.write_text("#!/bin/sh\nexit 0\n")
+        frontend.chmod(0o755)
+        instructions = (script.parent.parent / "docs/installation.md").read_text()
+        line = "\nscripts/build-slim-audio.sh\n"
+        documented = line + instructions.split(line, 1)[1].split("\n```", 1)[0]
+        subprocess.run(["sh", "-ec", documented], cwd=repo, check=True, capture_output=True)
+
+        self.assertTrue(all((self.bin / name).is_symlink() for name in installer.PROGRAMS))
+        self.assertEqual(self.current.resolve(), old)
+        self.assertEqual(self.installed(), old_bytes)
+        prefix = self.home / ".local/opt/rustune-source/bin"
+        self.assertEqual(tuple((prefix / name).read_bytes() for name in installer.PROGRAMS), old_bytes)
+
     @unittest.skipUnless(release_archive, "pass RUSTUNE_TEST_RELEASE_ARCHIVE to check built executables")
     def test_built_pair_and_doctor(self):
         shutil.copyfile(release_archive, self.archive)
         code, _, error = self.run_installer(
-            digest=installer.SHA256 if os.environ.get("RUSTUNE_TEST_PINNED_SHA") == "1" else None
+            digest=installer.SHA256 if pinned_release else None
         )
         self.assertEqual(code, 0, error)
         for name in installer.PROGRAMS:

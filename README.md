@@ -55,7 +55,8 @@ python3 "$work/install.py"'
 The installer verifies the release archive and installs both executables in
 `~/.local/bin`. Run `~/.local/bin/rustune doctor` to check the installed pair.
 For runtime dependencies, manual-install migration and builds from source, see
-the [installation guide](docs/installation.md).
+the [installation guide](docs/installation.md). Source builds use a separate
+prefix so they can coexist with the managed pair.
 
 Place your compatible signed CDM at `~/.cache/rustune/drm/libwidevinecdm.so`, with directory mode `0700` and file mode `0600`. It is not redistributed. Enter your own Media User Token through the masked local prompt. Public application authorization is retrieved anonymously from Apple and cached privately; no signed-in browser session is read.
 

@@ -30,8 +30,9 @@ jobs:
       - run: cargo test --locked --features rustune-audio/slim-ffmpeg
       - run: cargo build --locked --release --workspace --features rustune-audio/slim-ffmpeg
 
-      - name: Exercise installer with packaged native binaries
+      - name: Exercise installer with CI-built binaries and their computed checksum
         run: |
           scripts/package-release.sh target/release "$RUNNER_TEMP/rustune-dist"
           asset=$(find "$RUNNER_TEMP/rustune-dist" -maxdepth 1 -name '*.tar.gz')
-          RUSTUNE_TEST_RELEASE_ARCHIVE="$asset" python3 -B scripts/test-install.py
+          # The release uploader separately tests the exact archive with RUSTUNE_TEST_PINNED_SHA=1.
+          RUSTUNE_TEST_PINNED_SHA=0 RUSTUNE_TEST_RELEASE_ARCHIVE="$asset" python3 -B scripts/test-install.py

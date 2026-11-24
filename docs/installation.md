@@ -41,7 +41,9 @@ active for your user. It leaves process control to you.
 
 Run the install command from the release you want. Managed installs switch
 both binaries together through `~/.local/bin/.rustune-managed/current`.
-Previous pairs stay in `~/.local/bin/.rustune-managed/releases`.
+Previous pairs stay in `~/.local/bin/.rustune-managed/releases`. If the
+installer exits with code 2, the new pair is active and persistence after a
+crash could not be confirmed. Check the filesystem and retry the same command.
 
 If you copied the two binaries into `~/.local/bin` by hand, move both into
 a backup directory before running the installer. This also applies to old
@@ -74,12 +76,17 @@ Build from the repository root:
 
 ```sh
 scripts/build-slim-audio.sh
-install -Dm755 target/release/rustune ~/.local/bin/rustune
-install -Dm755 target/release/rustune-audio ~/.local/bin/rustune-audio
-rustune init
-rustune login
-rustune
+rustune_source_bin="$HOME/.local/opt/rustune-source/bin"
+install -Dm755 target/release/rustune "$rustune_source_bin/rustune"
+install -Dm755 target/release/rustune-audio "$rustune_source_bin/rustune-audio"
+"$rustune_source_bin/rustune" doctor
 ```
+
+The source build uses a separate prefix so it can coexist with a managed
+install in `~/.local/bin`. Run `"$rustune_source_bin/rustune" init`,
+`"$rustune_source_bin/rustune" login` and `"$rustune_source_bin/rustune"` as
+needed. Close the running TUI and daemon before switching between builds.
+Both builds use the same XDG Rustune state by default.
 
 The script downloads and verifies checksum-pinned FFmpeg9.0.2, builds a private
 AAC/MOV/HTTPS subset and both Rust executables. It requires network access for
@@ -104,7 +111,7 @@ the helper is missing, incompatible or fails to answer within one second.
 Never add tokens, private caches or the CDM to source control.
 
 To update, close the old TUI, run `rustune ctl shutdown` if a service is running,
-replace both executables, then reopen `rustune`. Use the install command above for managed installations.
+replace both executables in the source prefix, then reopen the intended build. Use the install command above for managed installations.
 Queue/configuration/token files
 remain in their XDG directories. Already running processes use their old executable
 until stopped. Avoid replacing an executable during active playback.
@@ -123,6 +130,23 @@ timestamps, ownership and modes and omits the gzip timestamp and filename.
 Packaging the same binaries with the same GNU tar and gzip produces identical
 archive bytes. Run `sha256sum -c` from the output directory. The binary archive's
 digest must match `SHA256` in `scripts/install.py` at the release tag.
+
+The CI installer test computes a checksum for the archive it just built.
+That exercises the installer with CI's binaries. Before publishing, run the
+following from the exact source revision to be tagged, with the archive you
+intend to upload. This command checks the digest pinned in the installer and
+installs that archive in an isolated directory with a mocked download.
+
+```sh
+release_dir=/absolute/path/to/dist
+asset=rustune-v0.5.1-x86_64-unknown-linux-gnu.tar.gz
+(cd "$release_dir" && sha256sum -c "$asset.sha256") &&
+RUSTUNE_TEST_PINNED_SHA=1 RUSTUNE_TEST_RELEASE_ARCHIVE="$release_dir/$asset" \
+    python3 -B scripts/test-install.py
+```
+
+Both commands must succeed. Upload the verified archive unchanged, together
+with its checksum and the FFmpeg source asset below.
 
 The release's audio helper uses FFmpeg 9.0.2 under the LGPL (2.1 or later).
 Publish the exact `ffmpeg-9.0.2.tar.xz` downloaded by the build script alongside

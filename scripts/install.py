@@ -10,8 +10,8 @@ from pathlib import Path
 import platform
 import re
 import shlex
-import signal
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -32,6 +32,34 @@ MAX_TAR = 64 * 1024 * 1024
 
 class InstallError(Exception):
     pass
+
+
+class PersistenceError(InstallError):
+    """The active pair is visible, but its persistence could not be confirmed."""
+
+
+def sync_file(path):
+    with path.open("rb") as stream:
+        os.fsync(stream.fileno())
+
+
+def sync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def sync_activation(root, destination):
+    errors = []
+    for directory in (root, destination):
+        try:
+            sync_directory(directory)
+        except OSError as error:
+            errors.append(f"{directory}: {error}")
+    if errors:
+        raise PersistenceError("; ".join(errors))
 
 
 def check_platform():
@@ -172,6 +200,9 @@ def install(pair, destination):
     destination.mkdir(exist_ok=True, parents=True)
     destination = destination.resolve(strict=True)
     owned_directory(destination)
+    # Persist the enclosing entries if ~/.local/bin was just created.
+    sync_directory(destination.parent)
+    sync_directory(destination.parent.parent)
     lock = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -191,6 +222,11 @@ def install_locked(pair, destination):
         and filecmp.cmp(pair / name, previous / name, shallow=False) for name in PROGRAMS
     ):
         check_pair(previous)
+        for name in PROGRAMS:
+            sync_file(previous / name)
+        sync_directory(previous)
+        sync_directory(root / "releases")
+        sync_activation(root, destination)
         return
 
     with tempfile.TemporaryDirectory(prefix=".rustune-stage-", dir=destination) as work:
@@ -199,6 +235,8 @@ def install_locked(pair, destination):
         for name in PROGRAMS:
             shutil.copyfile(pair / name, candidate / name)
             (candidate / name).chmod(0o755)
+            sync_file(candidate / name)
+        sync_directory(candidate)
         # Test from the installation filesystem, even when TMPDIR is noexec.
         check_pair(candidate)
 
@@ -206,8 +244,13 @@ def install_locked(pair, destination):
             layout = staging / "layout"
             layout.mkdir(mode=0o700)
             (layout / "releases").mkdir(mode=0o700)
-            (layout / "layout").write_text(LAYOUT)
+            marker = layout / "layout"
+            marker.write_text(LAYOUT)
+            sync_file(marker)
+            sync_directory(layout / "releases")
+            sync_directory(layout)
             layout.rename(root)
+            sync_directory(destination)
 
         release = root / "releases" / candidate.name
         if os.path.lexists(release):
@@ -222,10 +265,15 @@ def install_locked(pair, destination):
         active = root / "current"
         try:
             candidate.rename(release)
+            sync_directory(root / "releases")
             for path, link_target in missing:
                 path.symlink_to(link_target)
                 links_added.append(path)
+            sync_directory(staging)
+            sync_directory(root)
+            sync_directory(destination)
             pointer.replace(active)
+            sync_activation(root, destination)
         finally:
             try:
                 committed = active.is_symlink() and os.readlink(active) == target
@@ -256,6 +304,14 @@ def main():
             download(archive)
             unpack(archive, pair)
             install(pair, destination)
+    except PersistenceError as error:
+        print(
+            f"Rustune {VERSION} is active in {destination}, but the filesystem could not "
+            f"confirm it will persist after a crash: {error}. "
+            "Check the filesystem and run this installer again.",
+            file=sys.stderr,
+        )
+        return 2
     except subprocess.CalledProcessError:
         print("Rustune installation failed: could not download the pinned release.", file=sys.stderr)
         return 1
