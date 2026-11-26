@@ -152,6 +152,14 @@ with tempfile.TemporaryDirectory(prefix="rustune-pty-playlist-") as folder:
                     assert queue_release.wait(15), "queue release not signaled"
                 answer["data"] = {"items": tracks(offset, status["queue_len"], queue=True),
                                   "revision": status["queue_revision"], "total": status["queue_len"]}
+                if offset == 15:
+                    # Older daemons ignore the annotated request field.
+                    answer["data"]["upcoming"] = list(range(1000, 1000 + status["queue_len"]))
+                else:
+                    answer["data"]["upcoming_ranks"] = {
+                        item["entry_id"]: item["entry_id"] - 999
+                        for item in answer["data"]["items"]
+                    }
             else:
                 if command in ("playlist", "queue_action", "playlist_write", "album"):
                     played.append(request)
@@ -296,6 +304,10 @@ with tempfile.TemporaryDirectory(prefix="rustune-pty-playlist-") as folder:
             type_keys(wheel(24, 8), 4)
             expect("boundary wheel leaves the menu open while page is pending", song_menu)
             assert pages == [0, 25, 50]
+            type_keys(b"Rx")
+            expect("menu processes input while fetching", lambda: seen("› Append to end") and song_menu())
+            drain(.2)
+            expect("R while loading sends no duplicate playlist read", lambda: pages == [0, 25, 50])
             playlist_release[1].set()
             expect("failed playlist page leaves the original menu open", lambda: seen("temporary fixture outage") and song_menu())
             assert "Track 25" in screen.display[line_with("SONG ACTIONS")]
@@ -304,6 +316,10 @@ with tempfile.TemporaryDirectory(prefix="rustune-pty-playlist-") as folder:
             type_keys(b"R")
             expect("R in the menu retries the same cursor once", lambda: pages == [0, 25, 50, 50])
             assert song_menu()
+            type_keys(b"Rz")
+            expect("menu still processes input while retrying", lambda: seen("› Lyrics") and song_menu())
+            drain(.2)
+            expect("R during retry sends no further playlist reads", lambda: pages == [0, 25, 50, 50])
             playlist_release[2].set()
             expect("successful retry scrolls one row before closing the menu",
                    lambda: not song_menu() and window(27, 51) and seen("Selected #26 offscreen"))
@@ -357,6 +373,8 @@ with tempfile.TemporaryDirectory(prefix="rustune-pty-playlist-") as folder:
 
             type_keys(b"4")
             expect("Minimal queue first page", lambda: seen("#1014"))
+            expect("annotated queue displays one-based ranks 1 and 2",
+                   lambda: seen("[next 1] Track 1") and seen("[next 2] Track 2"))
             type_keys(wheel(32, 10), 5)
             expect("only one QueuePage is pending for the boundary", lambda: queue_pages.count(15) == 1)
             type_keys(b" ")
@@ -364,6 +382,8 @@ with tempfile.TemporaryDirectory(prefix="rustune-pty-playlist-") as folder:
             assert not queue_release.is_set() and queue_pages.count(15) == 1
             queue_release.set()
             expect("queue crosses to page 2 and retains off-page selection", lambda: seen("#1015") and seen("Selected #1 offscreen"))
+            expect("legacy queue displays one-based ranks 16 and 17",
+                   lambda: seen("[next 16] Track 15") and seen("[next 17] Track 17"))
             type_keys(wheel(32, 10, False))
             expect("queue wheel returns across the boundary", lambda: seen("#1014") and not seen("Selected #1 offscreen"))
             type_keys(wheel(32, 10))

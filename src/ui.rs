@@ -1919,7 +1919,7 @@ impl App {
                                     } else if let Some(rank) =
                                         self.queue_upcoming.get(&e.entry_id).copied()
                                     {
-                                        format!("[next {}] ", rank + 1)
+                                        format!("[next {rank}] ")
                                     } else {
                                         "[past] ".into()
                                     }

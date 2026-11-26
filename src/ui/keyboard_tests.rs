@@ -54,6 +54,35 @@ fn song_actions_allow_queueing_without_attempting_playback() {
     ));
 }
 #[test]
+fn song_actions_retry_only_a_failed_browse() {
+    let mut app = App::new(Config::default());
+    app.screen = Screen::Playlists;
+    app.kind = "open:library-playlists:p.fixture".into();
+    app.open_song_actions(Track::default());
+    let request = Request::Browse {
+        kind: app.kind.clone(),
+        term: app.query.clone(),
+        next: Some("fixture:50".into()),
+    };
+    let (jobs, mut pending) = mpsc::channel(1);
+    let retry = KeyCode::Char('R');
+
+    assert!(press(&mut app, retry).is_none());
+    app.dispatch(&jobs, request.clone());
+    let original = pending.try_recv().unwrap();
+    assert!(press(&mut app, retry).is_none());
+
+    app.request_failed(&request);
+    let retried = press(&mut app, retry).expect("failed browse can be retried from its menu");
+    app.dispatch(&jobs, retried);
+    assert_eq!(
+        serde_json::to_value(pending.try_recv().unwrap()).unwrap(),
+        serde_json::to_value(original).unwrap()
+    );
+    assert!(press(&mut app, retry).is_none());
+    assert!(app.song_actions.is_some());
+}
+#[test]
 fn right_arrow_focuses_player_buttons_and_enter_activates() {
     let mut app = App::new(Config::default());
     app.screen = Screen::NowPlaying;

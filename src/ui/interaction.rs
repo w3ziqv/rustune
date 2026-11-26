@@ -363,10 +363,10 @@ impl App {
             KeyCode::Char('R') => {
                 let request = if self.screen == Screen::Queue {
                     self.queue_retry.map(|offset| self.queue_page(offset))
-                } else if self.browse_state == BrowseState::Limited {
-                    None
+                } else if self.browse_state == BrowseState::Failed {
+                    self.browse_retry.clone()
                 } else {
-                    self.browse_retry.clone().or(Some(Request::RetryOperation))
+                    None
                 };
                 return (false, request);
             }
