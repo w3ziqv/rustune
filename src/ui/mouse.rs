@@ -85,11 +85,17 @@ impl App {
                     if menu.contains(point) {
                         self.scroll_song_menu(direction);
                     } else if list.contains(point) && self.catalog_screen() {
-                        let (moved, request) = self.scroll_catalog(list, direction);
-                        if moved {
-                            self.song_actions = None;
+                        match self.scroll_catalog(list, direction) {
+                            scroll::Scroll::Shifted(request) => {
+                                self.song_actions = None;
+                                return (false, request);
+                            }
+                            scroll::Scroll::Pending(request) => {
+                                self.defer_menu_scroll(request.clone());
+                                return (false, request);
+                            }
+                            scroll::Scroll::Idle => {}
                         }
-                        return (false, request);
                     }
                 } else {
                     return (false, self.scroll_panel(&shell, point, direction));
@@ -209,7 +215,7 @@ impl App {
                                 direction,
                             );
                         } else {
-                            return self.scroll_catalog(list, direction).1;
+                            return self.scroll_catalog(list, direction).request();
                         }
                     }
                 }

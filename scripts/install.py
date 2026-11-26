@@ -20,7 +20,7 @@ import tempfile
 
 VERSION = "0.6.0"
 ASSET = f"rustune-v{VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-SHA256 = "911483073bbb765ffd4a8ebec03afd63837d7b555f72feba28bf44699339dd8d"
+SHA256 = "9466a3ed37dfa773be15799044e6efdbb955b5459c139877fad9f09f5180df7b"
 URL = f"https://github.com/w3ziqv/rustune/releases/download/v{VERSION}/{ASSET}"
 MIN_GLIBC = (2, 39)
 PROGRAMS = ("rustune", "rustune-audio")

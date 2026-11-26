@@ -280,7 +280,8 @@ async fn main() -> Result<()> {
                                         &ipc::request(
                                             &paths,
                                             &Request::QueuePage {
-                                                offset: entry_id.unwrap_or(0) as usize
+                                                offset: entry_id.unwrap_or(0) as usize,
+                                                annotated: false,
                                             }
                                         )
                                         .await?

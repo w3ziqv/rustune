@@ -125,6 +125,24 @@ pub(super) fn render_text(
     indicator(f, area, offset, max, p);
 }
 
+/// Wheel result for menu handling. `Shifted` moved the rows already (an
+/// optional prefetch may ride along); `Pending` moves them only when the
+/// page fetch it identified actually applies.
+pub(super) enum Scroll {
+    Shifted(Option<Request>),
+    Pending(Option<Request>),
+    Idle,
+}
+
+impl Scroll {
+    pub(super) fn request(&self) -> Option<Request> {
+        match self {
+            Scroll::Shifted(request) | Scroll::Pending(request) => request.clone(),
+            Scroll::Idle => None,
+        }
+    }
+}
+
 impl App {
     pub(super) fn catalog_screen(&self) -> bool {
         matches!(
@@ -205,7 +223,7 @@ impl App {
                     .saturating_sub(status.profile.limits().page_size),
                 _ => return None,
             };
-            Some(Request::QueuePage { offset })
+            Some(self.queue_page(offset))
         } else if self.browse_state != BrowseState::Loading {
             let next = match direction {
                 Direction::Up => self.previous.clone().or_else(|| {
@@ -231,13 +249,9 @@ impl App {
         Some(request)
     }
 
-    pub(super) fn scroll_catalog(
-        &mut self,
-        area: Rect,
-        direction: Direction,
-    ) -> (bool, Option<Request>) {
+    pub(super) fn scroll_catalog(&mut self, area: Rect, direction: Direction) -> Scroll {
         if self.items.is_empty() || area.is_empty() {
-            return (false, None);
+            return Scroll::Idle;
         }
         if direction == Direction::Up {
             self.list_view.stop_append();
@@ -248,7 +262,7 @@ impl App {
         let next_top = direction.step(top, maximum);
         if next_top != top {
             self.list_view.top = Some(next_top);
-            return (true, self.playlist_page(false));
+            return Scroll::Shifted(self.playlist_page(false));
         }
         if self.playlist_tracks() {
             if direction == Direction::Down
@@ -257,15 +271,15 @@ impl App {
             {
                 self.list_view.top = Some(top);
                 self.list_view.advance_after_append = true;
-                return (true, self.playlist_page(false));
+                return Scroll::Pending(self.playlist_page(false));
             }
-            return (false, None);
+            return Scroll::Idle;
         }
         if self.browse_state == BrowseState::Failed {
-            return (false, None);
+            return Scroll::Idle;
         }
         let Some(request) = self.page_turn(direction) else {
-            return (false, None);
+            return Scroll::Idle;
         };
         if self.list_view.selection.is_none() {
             self.list_view.selection = self.items.get(self.selected).map(|track| PageSelection {
@@ -281,7 +295,7 @@ impl App {
             });
         }
         self.list_view.placement = Some(PagePlacement::Scroll(direction));
-        (true, Some(request))
+        Scroll::Pending(Some(request))
     }
 
     pub(super) fn reveal_selection(&mut self) -> Option<Request> {
@@ -298,9 +312,7 @@ impl App {
             }
             self.list_view.placement = Some(PagePlacement::Reveal);
             return Some(if self.screen == Screen::Queue {
-                Request::QueuePage {
-                    offset: selection.offset,
-                }
+                self.queue_page(selection.offset)
             } else {
                 self.browse_cursor(selection.cursor.clone())
             });
@@ -382,14 +394,17 @@ impl App {
         };
     }
 
-    pub(super) fn finish_playlist_append(&mut self, old_len: usize) {
-        if std::mem::take(&mut self.list_view.advance_after_append) && self.items.len() > old_len {
+    pub(super) fn finish_playlist_append(&mut self, old_len: usize) -> bool {
+        let advanced =
+            std::mem::take(&mut self.list_view.advance_after_append) && self.items.len() > old_len;
+        if advanced {
             let main = navigation::layout(self.viewport, self.screen).main;
             let height = self.list_height(usize::from(self.catalog_areas(main)[1].height));
             if height > 0 {
                 self.list_view.top = Some(old_len.saturating_sub(height) + 1);
             }
         }
+        advanced
     }
 }
 
@@ -400,6 +415,11 @@ pub(super) fn direction(down: bool) -> Direction {
 impl ListViewport {
     pub(super) fn stop_append(&mut self) {
         self.advance_after_append = false;
+    }
+
+    /// True while a page fetch was started as an actual scroll shift.
+    pub(super) fn scrolling(&self) -> bool {
+        matches!(self.placement, Some(PagePlacement::Scroll(_)))
     }
 
     pub(super) fn forget_placement(&mut self) {

@@ -42,6 +42,10 @@ pub enum Request {
     Subscribe,
     QueuePage {
         offset: usize,
+        /// Request per-row upcoming ranks instead of the full upcoming
+        /// id list; legacy clients that omit it keep the old response.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        annotated: bool,
     },
     History,
     RecordSearch(String),

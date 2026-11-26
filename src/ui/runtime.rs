@@ -1,4 +1,5 @@
-//! Bounded independent metadata, queue mutation and immediate transport lanes.
+//! Bounded independent metadata (catalog and queue pages), queue mutation and
+//! immediate transport lanes.
 use super::*;
 fn mutation(request: &Request) -> bool {
     matches!(
@@ -34,20 +35,36 @@ pub(super) async fn requests(
     let metadata_paths = paths.clone();
     let metadata_done = done.clone();
     tasks.spawn(async move {
-        while metadata.changed().await.is_ok() {
-            let Some(request) = metadata.borrow_and_update().clone() else {
+        'await_change: while metadata.changed().await.is_ok() {
+            let Some(mut request) = metadata.borrow_and_update().clone() else {
                 continue;
             };
-            let result = tokio::select! {
-                biased;
-                changed=metadata.changed()=>{if changed.is_err(){break;}continue;}
-                result=ipc::request(&metadata_paths,&request)=>result,
-            };
-            if metadata.has_changed().unwrap_or(true) {
-                continue;
-            }
-            if metadata_done.send((request, result)).await.is_err() {
-                break;
+            'run: loop {
+                tokio::select! {
+                    biased;
+                    changed = metadata.changed() => {
+                        if changed.is_err() {
+                            break 'await_change;
+                        }
+                        // changed() consumed the change mark, so the newer
+                        // request must take over here: re-awaiting a mark
+                        // would leave it pending until the next dispatch.
+                        match metadata.borrow_and_update().clone() {
+                            Some(next) => request = next,
+                            None => break 'await_change,
+                        }
+                        continue 'run;
+                    }
+                    result = ipc::request(&metadata_paths, &request) => {
+                        if metadata.has_changed().unwrap_or(true) {
+                            continue 'await_change;
+                        }
+                        if metadata_done.send((request, result)).await.is_err() {
+                            break 'await_change;
+                        }
+                        break 'run;
+                    }
+                }
             }
         }
     });
@@ -71,7 +88,7 @@ pub(super) async fn requests(
         }
     });
     while let Some(request) = work.recv().await {
-        if matches!(request, Request::Browse { .. }) {
+        if matches!(request, Request::Browse { .. } | Request::QueuePage { .. }) {
             meta.send_replace(Some(request));
             continue;
         }
@@ -127,6 +144,102 @@ mod tests {
         let request: Request =
             serde_json::from_slice(&ipc::read_frame(&mut fast).await.unwrap()).unwrap();
         assert!(matches!(request, Request::Toggle));
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn slow_queue_page_does_not_delay_transport() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            config: dir.path().join("c"),
+            data: dir.path().join("d"),
+            cache: dir.path().join("a"),
+            runtime: dir.path().join("r"),
+        };
+        paths.init().unwrap();
+        let listener = tokio::net::UnixListener::bind(paths.socket()).unwrap();
+        let (jobs, work) = mpsc::channel(8);
+        let (done, _responses) = mpsc::channel(8);
+        let worker = tokio::spawn(requests(paths, work, done));
+        jobs.send(Request::QueuePage {
+            offset: 15,
+            annotated: true,
+        })
+        .await
+        .unwrap();
+        let (mut slow, _) = listener.accept().await.unwrap();
+        ipc::read_frame(&mut slow).await.unwrap();
+        jobs.send(Request::Toggle).await.unwrap();
+        let (mut fast, _) =
+            tokio::time::timeout(std::time::Duration::from_millis(300), listener.accept())
+                .await
+                .expect("Toggle must reach service while a queue page is pending")
+                .unwrap();
+        let request: Request =
+            serde_json::from_slice(&ipc::read_frame(&mut fast).await.unwrap()).unwrap();
+        assert!(matches!(request, Request::Toggle));
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn superseded_queue_pages_produce_a_single_pending_metadata_lane() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            config: dir.path().join("c"),
+            data: dir.path().join("d"),
+            cache: dir.path().join("a"),
+            runtime: dir.path().join("r"),
+        };
+        paths.init().unwrap();
+        let listener = tokio::net::UnixListener::bind(paths.socket()).unwrap();
+        let (jobs, work) = mpsc::channel(8);
+        let (done, mut responses) = mpsc::channel(8);
+        let worker = tokio::spawn(requests(paths, work, done));
+        jobs.send(Request::QueuePage {
+            offset: 15,
+            annotated: true,
+        })
+        .await
+        .unwrap();
+        let (mut stale, _) = listener.accept().await.unwrap();
+        ipc::read_frame(&mut stale).await.unwrap();
+        // The second page replaces the first pending read; only the latest
+        // offset may stay in flight and only its reply comes back.
+        jobs.send(Request::QueuePage {
+            offset: 30,
+            annotated: true,
+        })
+        .await
+        .unwrap();
+        let (mut current, _) = listener.accept().await.unwrap();
+        let request: Request =
+            serde_json::from_slice(&ipc::read_frame(&mut current).await.unwrap()).unwrap();
+        assert!(matches!(
+            request,
+            Request::QueuePage {
+                offset: 30,
+                annotated: true,
+            }
+        ));
+        let _ = ipc::write_frame(&mut current, &serde_json::json!({})).await;
+        let (replied, _result) =
+            tokio::time::timeout(std::time::Duration::from_millis(300), responses.recv())
+                .await
+                .expect("the latest queue page must be answered")
+                .unwrap();
+        assert!(matches!(
+            replied,
+            Request::QueuePage {
+                offset: 30,
+                annotated: true,
+            }
+        ));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), responses.recv())
+                .await
+                .is_err(),
+            "the superseded queue page must not deliver a reply"
+        );
         worker.abort();
     }
 }

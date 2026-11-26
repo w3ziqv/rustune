@@ -147,7 +147,7 @@ pub struct App {
     playlist_dialog: Option<playlists::PlaylistDialog>,
     playlist_target: Option<ipc::PlaylistWriteSource>,
     queue_rows: Vec<crate::queue::QueueEntry>,
-    queue_upcoming: Vec<u64>,
+    queue_upcoming: std::collections::HashMap<u64, usize>,
     nav: usize,
     items: Vec<Track>,
     next: Option<String>,
@@ -203,7 +203,7 @@ impl App {
             self.browse_state = BrowseState::Loading;
             self.browse_retry = Some(request.clone());
         }
-        if let Request::QueuePage { offset } = &request {
+        if let Request::QueuePage { offset, .. } = &request {
             self.queue_request = Some(*offset);
             self.queue_retry = None;
         }
@@ -223,7 +223,7 @@ impl App {
             self.browse_state = BrowseState::Failed;
             self.browse_retry = Some(request.clone());
         }
-        if let Request::QueuePage { offset } = request
+        if let Request::QueuePage { offset, .. } = request
             && self.queue_request == Some(*offset)
         {
             self.queue_request = None;
@@ -265,7 +265,7 @@ impl App {
             playlist_dialog: None,
             playlist_target: None,
             queue_rows: Vec::new(),
-            queue_upcoming: Vec::new(),
+            queue_upcoming: std::collections::HashMap::new(),
             nav: 0,
             items: Vec::new(),
             next: None,
@@ -523,6 +523,7 @@ impl App {
             }
             Request::QueuePage {
                 offset: self.queue_offset,
+                annotated: true,
             }
         } else {
             Request::Browse {
@@ -892,7 +893,7 @@ impl App {
                 {
                     return Ok((
                         false,
-                        self.queue_retry.map(|offset| Request::QueuePage { offset }),
+                        self.queue_retry.map(|offset| self.queue_page(offset)),
                     ));
                 }
                 KeyCode::Char('R') if self.screen == Screen::AudioInfo => {
@@ -1324,7 +1325,9 @@ impl App {
                 if append {
                     let old_len = self.items.len();
                     self.items.extend(p.items);
-                    self.finish_playlist_append(old_len);
+                    if self.finish_playlist_append(old_len) {
+                        self.close_menu_after_scroll(r);
+                    }
                 } else {
                     self.song_actions = None;
                     self.empty_scroll = 0;
@@ -1357,7 +1360,7 @@ impl App {
                     self.finish_page(cursor, next.as_deref());
                 }
             }
-            Request::QueuePage { offset } => {
+            Request::QueuePage { offset, .. } => {
                 if self.screen != Screen::Queue
                     || *offset != self.queue_request.unwrap_or(self.queue_offset)
                 {
@@ -1377,11 +1380,31 @@ impl App {
                 }
                 let rows: Vec<crate::queue::QueueEntry> =
                     serde_json::from_value(value["items"].clone())?;
-                let upcoming = value
-                    .get("upcoming")
-                    .map(|v| serde_json::from_value(v.clone()))
-                    .transpose()?
-                    .unwrap_or_default();
+                let upcoming = match value.get("upcoming_ranks") {
+                    Some(ranks) => ranks
+                        .as_object()
+                        .map(|ranks| {
+                            ranks
+                                .iter()
+                                .filter_map(|(entry_id, rank)| {
+                                    let entry_id = entry_id.parse::<u64>().ok()?;
+                                    let rank = rank.as_u64()? as usize;
+                                    Some((entry_id, rank))
+                                })
+                                .collect::<std::collections::HashMap<u64, usize>>()
+                        })
+                        .unwrap_or_default(),
+                    None => value
+                        .get("upcoming")
+                        .map(|v| serde_json::from_value::<Vec<u64>>(v.clone()))
+                        .transpose()?
+                        .unwrap_or_default()
+                        .into_iter()
+                        .enumerate()
+                        .map(|(position, entry_id)| (entry_id, position + 1))
+                        .collect(),
+                };
+                let scrolling = self.list_view.scrolling();
                 self.queue_view_revision = revision;
                 self.queue_request = None;
                 self.queue_retry = None;
@@ -1391,6 +1414,9 @@ impl App {
                 self.queue_upcoming = upcoming;
                 self.rows_revision = self.rows_revision.wrapping_add(1);
                 self.finish_page(None, None);
+                if scrolling {
+                    self.close_menu_after_scroll(r);
+                }
             }
             Request::History => {
                 self.note = serde_json::from_value::<Vec<String>>(value)?.join("  ·  ")
@@ -1891,7 +1917,7 @@ impl App {
                                     {
                                         "[now] ".into()
                                     } else if let Some(rank) =
-                                        self.queue_upcoming.iter().position(|id| *id == e.entry_id)
+                                        self.queue_upcoming.get(&e.entry_id).copied()
                                     {
                                         format!("[next {}] ", rank + 1)
                                     } else {
@@ -2183,7 +2209,7 @@ pub async fn run(config: Config, paths: Paths) -> Result<()> {
                             || kind != &app.kind || term != &app.query
                             || !matches!(&app.browse_retry, Some(Request::Browse {next: pending, ..}) if pending == next))
                     { continue; }
-                    if let Request::QueuePage {offset}=&r && (app.screen!=Screen::Queue || *offset!=app.queue_request.unwrap_or(app.queue_offset)) {continue;}
+                    if let Request::QueuePage {offset,..}=&r && (app.screen!=Screen::Queue || *offset!=app.queue_request.unwrap_or(app.queue_offset)) {continue;}
                     let _publication = if result.is_ok()
                         && matches!(&r, Request::Browse { kind, .. } if crate::catalog::playlist::private_kind(kind))
                     {
@@ -2329,7 +2355,7 @@ mod login_tests {
         assert!(
             matches!(
                 app.on_status(changed.clone()),
-                Some(Request::QueuePage { offset: 0 })
+                Some(Request::QueuePage { offset: 0, .. })
             ),
             "same-length external reorders must refresh visible items"
         );
@@ -2343,7 +2369,7 @@ mod login_tests {
         assert!(
             matches!(
                 app.on_status(serde_json::from_value(shrunk).unwrap()),
-                Some(Request::QueuePage { offset: 0 })
+                Some(Request::QueuePage { offset: 0, .. })
             ),
             "removing the current page must return to a valid queue page"
         );
@@ -2353,7 +2379,7 @@ mod login_tests {
         let mut app = App::new(Config::default());
         app.screen = Screen::Queue;
         app.viewport = Size::new(142, 39);
-        app.accept(&Request::QueuePage{offset:0},serde_json::json!({"items":[{"id":"fixture","title":"Our song","artist":"Our artist"}]})).unwrap();
+        app.accept(&Request::QueuePage{offset:0,annotated:true},serde_json::json!({"items":[{"id":"fixture","title":"Our song","artist":"Our artist"}]})).unwrap();
         app.key(crossterm::event::KeyEvent::new(
             KeyCode::Char('l'),
             KeyModifiers::NONE,
@@ -2435,7 +2461,7 @@ mod login_tests {
     fn selected_queue_song_can_open_lyrics_without_a_playback_backend() {
         let mut app = App::new(Config::default());
         app.screen = Screen::Queue;
-        app.accept(&Request::QueuePage{offset:0},serde_json::json!({"items":[{"id":"saved-song","title":"Our saved song","artist":"Our artist","duration_ms":100000}]})).unwrap();
+        app.accept(&Request::QueuePage{offset:0,annotated:true},serde_json::json!({"items":[{"id":"saved-song","title":"Our saved song","artist":"Our artist","duration_ms":100000}]})).unwrap();
         let result = app
             .key(crossterm::event::KeyEvent::new(
                 KeyCode::Char('l'),

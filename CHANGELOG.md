@@ -4,8 +4,17 @@
 
 - Scroll lists, text and dialogs under the pointer, including across result and
   queue pages. Long views keep their scroll position separate from the selection.
+- Queue pages and catalog pages are fetched on a bounded metadata lane, so a slow
+  queue page never delays transport control. One page fetch stays pending per
+  context and superseded pages never apply.
 - Click a song to open its actions. Scroll inside the menu to choose an action,
-  or over the exposed song list to close the menu and scroll there.
+  or over the exposed song list to close the menu and scroll there. When the
+  wheel waits for the next page, the menu stays open until the rows actually
+  move, survives a failed fetch and `R` retry, and a late reply never closes a
+  freshly opened menu.
+- Queue responses for paged scrolling carry per-row upcoming ranks instead of
+  the whole upcoming id list, bounding the wire at 10000 entries. `queue list`
+  keeps the legacy full response.
 - Access clipped panels and menu actions in short terminals. Paged navigation
   retains the previous rows if a load fails and can be retried with `R`.
 

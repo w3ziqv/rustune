@@ -153,9 +153,15 @@ async fn real_service_persists_queue_pushes_updates_and_obeys_mpris() {
         .await
         .unwrap();
     }
-    let entries = ipc::request(&paths, &Request::QueuePage { offset: 0 })
-        .await
-        .unwrap();
+    let entries = ipc::request(
+        &paths,
+        &Request::QueuePage {
+            offset: 0,
+            annotated: false,
+        },
+    )
+    .await
+    .unwrap();
     ipc::request(
         &paths,
         &ipc::queue_action(
@@ -168,9 +174,15 @@ async fn real_service_persists_queue_pushes_updates_and_obeys_mpris() {
     )
     .await
     .unwrap();
-    let page = ipc::request(&paths, &Request::QueuePage { offset: 0 })
-        .await
-        .unwrap();
+    let page = ipc::request(
+        &paths,
+        &Request::QueuePage {
+            offset: 0,
+            annotated: false,
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(page["items"][0]["id"], "c");
     assert!(
         ipc::request(&paths, &Request::Play).await.is_err(),
@@ -235,9 +247,15 @@ async fn real_service_persists_queue_pushes_updates_and_obeys_mpris() {
         Config::load(&paths).unwrap().artwork_style,
         rustune::config::ArtworkStyle::Smooth
     );
-    let before_restart = ipc::request(&paths, &Request::QueuePage { offset: 0 })
-        .await
-        .unwrap();
+    let before_restart = ipc::request(
+        &paths,
+        &Request::QueuePage {
+            offset: 0,
+            annotated: false,
+        },
+    )
+    .await
+    .unwrap();
     ipc::request(&paths, &Request::Stop).await.unwrap();
     for _ in 0..100 {
         if daemon.0.try_wait().unwrap().is_some() {
@@ -252,9 +270,15 @@ async fn real_service_persists_queue_pushes_updates_and_obeys_mpris() {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    let restored = ipc::request(&paths, &Request::QueuePage { offset: 0 })
-        .await
-        .unwrap();
+    let restored = ipc::request(
+        &paths,
+        &Request::QueuePage {
+            offset: 0,
+            annotated: false,
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(restored["items"], before_restart["items"]);
     assert_eq!(restored["total"], 3);
     assert_eq!(

@@ -557,10 +557,37 @@ impl Engine {
             }
             Request::Subscribe => anyhow::bail!("subscription requires a dedicated connection"),
             Request::Status => return Ok(serde_json::to_value(self.status())?),
-            Request::QueuePage { offset } => {
-                return Ok(
-                    json!({"items":self.queue.tracks.iter().skip(offset).take(self.config.performance.limits().page_size).collect::<Vec<_>>(),"offset":offset,"total":self.queue.tracks.len(),"revision":self.queue.revision,"upcoming":self.queue.upcoming_ids()}),
-                );
+            Request::QueuePage { offset, annotated } => {
+                let page: Vec<_> = self
+                    .queue
+                    .tracks
+                    .iter()
+                    .skip(offset)
+                    .take(self.config.performance.limits().page_size)
+                    .collect();
+                let payload = if annotated {
+                    // Bounded per-rows ranks keep paged scrolling wire-sized
+                    // independently of the whole queue length.
+                    let wanted: std::collections::HashSet<u64> =
+                        page.iter().map(|entry| entry.entry_id).collect();
+                    let ranks = self.queue.upcoming_ranks_for(&wanted);
+                    let annotations: serde_json::Map<String, serde_json::Value> = page
+                        .iter()
+                        .map(|entry| {
+                            let rank = ranks.get(&entry.entry_id);
+                            (
+                                entry.entry_id.to_string(),
+                                rank.map_or(serde_json::Value::Null, |rank| {
+                                    serde_json::json!(rank)
+                                }),
+                            )
+                        })
+                        .collect();
+                    json!({"items":page,"offset":offset,"total":self.queue.tracks.len(),"revision":self.queue.revision,"upcoming_ranks":annotations})
+                } else {
+                    json!({"items":page,"offset":offset,"total":self.queue.tracks.len(),"revision":self.queue.revision,"upcoming":self.queue.upcoming_ids()})
+                };
+                return Ok(payload);
             }
             Request::History => return Ok(json!(self.history)),
             Request::RecordSearch(term) => {
@@ -1237,5 +1264,84 @@ mod tests {
             assert!(error.contains("Native Linux playback"), "{error}");
             assert_eq!(e.queue.current, Some(0));
         }
+    }
+    #[tokio::test]
+    async fn annotated_queue_pages_bind_the_wire_to_the_page_not_the_queue() {
+        use crate::queue::{self, QueueContext};
+        async fn page(engine: &mut Engine, annotated: bool) -> (usize, serde_json::Value) {
+            let value = engine
+                .handle(Request::QueuePage {
+                    offset: 0,
+                    annotated,
+                })
+                .await
+                .unwrap();
+            let wire = serde_json::to_vec(&value).unwrap().len();
+            (wire, value)
+        }
+        let (_dir, mut small) = engine();
+        let (small_legacy_wire, _small_legacy) = page(&mut small, false).await;
+        let (_small_annotated_wire, small_annotated) = page(&mut small, true).await;
+        let (_dir2, mut engine) = engine();
+        let filler = (0..queue::MAX_QUEUE - engine.queue.tracks.len()).map(|i| Track {
+            id: format!("t{i}"),
+            kind: "songs".into(),
+            ..Track::default()
+        });
+        engine
+            .queue
+            .append(filler.collect(), QueueContext::single())
+            .unwrap();
+        let page_size = engine.config.performance.limits().page_size;
+        let (legacy_wire, legacy) = page(&mut engine, false).await;
+        let (annotated_wire, annotated) = page(&mut engine, true).await;
+        assert!(
+            legacy_wire > small_legacy_wire * 5,
+            "legacy wire grows with the queue: {legacy_wire} vs {small_legacy_wire}"
+        );
+        assert!(
+            legacy_wire - annotated_wire > 40_000,
+            "the redundant upcoming list dominates legacy responses"
+        );
+        let ranks_wire = serde_json::to_vec(&annotated["upcoming_ranks"])
+            .unwrap()
+            .len();
+        assert!(
+            ranks_wire < 2048,
+            "rank annotations stay page-bounded at 10k entries: {ranks_wire} B"
+        );
+        assert_eq!(
+            legacy["upcoming"].as_array().map(Vec::len),
+            Some(queue::MAX_QUEUE - 1),
+            "legacy responses keep the full upcoming list"
+        );
+        assert!(
+            annotated.get("upcoming").is_none(),
+            "annotated responses never carry the full list"
+        );
+        let ranks = annotated["upcoming_ranks"].as_object().unwrap();
+        assert_eq!(ranks.len(), page_size.min(queue::MAX_QUEUE));
+        for (entry_id, rank) in ranks {
+            let entry_id = entry_id.parse::<u64>().unwrap();
+            let expected = legacy["upcoming"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .position(|id| id.as_u64() == Some(entry_id))
+                .map(|position| position as u64 + 1)
+                .unwrap_or(0);
+            assert_eq!(rank.as_u64().unwrap_or(0), expected);
+        }
+        let current = engine.queue.current_entry_id().unwrap();
+        assert!(
+            ranks[&current.to_string()].is_null(),
+            "the playing row is not upcoming and stays unranked"
+        );
+        assert_eq!(
+            small_annotated["upcoming_ranks"]["2"].as_u64(),
+            Some(1),
+            "a fresh session still ranks visible rows for small queues"
+        );
+        assert_eq!(small_annotated["upcoming_ranks"]["3"].as_u64(), Some(2));
     }
 }

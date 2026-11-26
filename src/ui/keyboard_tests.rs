@@ -167,16 +167,28 @@ fn stale_queue_pages_do_not_populate_a_search_or_another_page() {
     let mut app = App::new(Config::default());
     app.screen = Screen::Search;
     let value = serde_json::json!({"items":[{"id":"old","kind":"songs","title":"Old queue"}]});
-    app.accept(&Request::QueuePage { offset: 0 }, value.clone())
-        .unwrap();
+    app.accept(
+        &Request::QueuePage {
+            offset: 0,
+            annotated: true,
+        },
+        value.clone(),
+    )
+    .unwrap();
     assert!(
         app.items.is_empty(),
         "queue response must not replace current public search"
     );
     app.screen = Screen::Queue;
     app.queue_offset = 25;
-    app.accept(&Request::QueuePage { offset: 0 }, value)
-        .unwrap();
+    app.accept(
+        &Request::QueuePage {
+            offset: 0,
+            annotated: true,
+        },
+        value,
+    )
+    .unwrap();
     assert!(
         app.items.is_empty(),
         "queue response offset must match the current page"

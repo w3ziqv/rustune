@@ -67,6 +67,10 @@ with tempfile.TemporaryDirectory(prefix="rustune-pty-playlist-") as folder:
     catalog_pages = []
     queue_pages = []
     unexpected = []
+    toggle_received = threading.Event()
+    queue_release = threading.Event()
+    playlist_release = {attempt: threading.Event() for attempt in range(1, 5)}
+    playlist_finished = {attempt: threading.Event() for attempt in range(1, 5)}
     queue_length = 10_000 if options.benchmark else 41
     status.update(queue_len=queue_length, queue_revision=7, profile="minimal")
     cursors = lambda offset: f"music:pl:{generation:016x}:{offset}"
@@ -101,10 +105,13 @@ with tempfile.TemporaryDirectory(prefix="rustune-pty-playlist-") as folder:
                 page_cursor = cursors if private else lambda offset: f"itunes:pl:{offset}"
                 if kind == "open:library-playlists:p.fixture":
                     pages.append(offset)
-                    if not options.benchmark and offset == 50 and pages.count(offset) == 1:
-                        time.sleep(.12)
-                        self.frame({"ok": False, "data": None, "error": "temporary fixture outage"})
-                        return
+                    if not options.benchmark and not options.first and offset == 50:
+                        attempt = pages.count(offset)
+                        if attempt in playlist_release:
+                            assert playlist_release[attempt].wait(15), "playlist release not signaled"
+                        if attempt == 1:
+                            self.frame({"ok": False, "data": None, "error": "temporary fixture outage"})
+                            return
                     total = 450 if options.benchmark else 56
                     records = tracks(offset, total)
                 elif kind == "playlists":
@@ -141,15 +148,22 @@ with tempfile.TemporaryDirectory(prefix="rustune-pty-playlist-") as folder:
             elif command == "queue_page":
                 offset = args["offset"]
                 queue_pages.append(offset)
+                if not options.benchmark and offset == 15 and queue_pages.count(offset) == 1:
+                    assert queue_release.wait(15), "queue release not signaled"
                 answer["data"] = {"items": tracks(offset, status["queue_len"], queue=True),
                                   "revision": status["queue_revision"], "total": status["queue_len"]}
             else:
                 if command in ("playlist", "queue_action", "playlist_write", "album"):
                     played.append(request)
+                elif command == "toggle":
+                    toggle_received.set()
                 elif command not in ("subscribe", "status", "record_search"):
                     unexpected.append(command)
                 answer["data"] = status
             self.frame(answer)
+            if command == "browse" and kind == "open:library-playlists:p.fixture" and offset == 50:
+                if not options.benchmark and not options.first and attempt in playlist_finished:
+                    playlist_finished[attempt].set()
             if command == "subscribe":
                 previous = dict(status)
                 while not stop.wait(.025):
@@ -160,8 +174,11 @@ with tempfile.TemporaryDirectory(prefix="rustune-pty-playlist-") as folder:
 
         def frame(self,value):
             body = json.dumps(value).encode()
-            self.wfile.write(struct.pack(">I",len(body))+body)
-            self.wfile.flush()
+            try:
+                self.wfile.write(struct.pack(">I",len(body))+body)
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # Superseded metadata reads may close their socket before this reply.
 
     server = socketserver.ThreadingUnixStreamServer(str(endpoint),Service)
     server.daemon_threads = True
@@ -272,12 +289,25 @@ with tempfile.TemporaryDirectory(prefix="rustune-pty-playlist-") as folder:
 
         def matrix():
             global generation
-            type_keys(wheel(24, 8), 34)
-            expect("playlist failure keeps old rows visible", lambda: seen("temporary fixture outage") and window(26, 50))
+            type_keys(wheel(24, 8), 23)
+            expect("third page is held with rows 26–50 visible", lambda: pages == [0, 25, 50] and window(26, 50))
+            type_keys(click(32, row(26)))
+            expect("second duplicate selected while playlist page is held", song_menu)
+            type_keys(wheel(24, 8), 4)
+            expect("boundary wheel leaves the menu open while page is pending", song_menu)
+            assert pages == [0, 25, 50]
+            playlist_release[1].set()
+            expect("failed playlist page leaves the original menu open", lambda: seen("temporary fixture outage") and song_menu())
+            assert "Track 25" in screen.display[line_with("SONG ACTIONS")]
             type_keys(wheel(24, 8), 6)
             assert pages == [0, 25, 50]
             type_keys(b"R")
-            expect("R retries the same playlist cursor once", lambda: pages == [0, 25, 50, 50])
+            expect("R in the menu retries the same cursor once", lambda: pages == [0, 25, 50, 50])
+            assert song_menu()
+            playlist_release[2].set()
+            expect("successful retry scrolls one row before closing the menu",
+                   lambda: not song_menu() and window(27, 51) and seen("Selected #26 offscreen"))
+            assert len(played) == 1
             type_keys(wheel(24, 8), 8)
             expect("continuous playlist reaches its end", lambda: window(32, 56))
             type_keys(wheel(24, 8, False), 31)
@@ -291,6 +321,31 @@ with tempfile.TemporaryDirectory(prefix="rustune-pty-playlist-") as folder:
             expect("the second Enter opens the original duplicate", song_menu)
             type_keys(b"\x1b")
             expect("Esc preserves the original selection", lambda: not song_menu() and seen("›  26  Track 25"))
+            type_keys(b"3")
+            expect("return to playlist directory", lambda: seen("Fixture Mix"))
+            type_keys(b"\r")
+            expect("reopen the original playlist with a new viewport", lambda: window(1, 25))
+            type_keys(wheel(24, 8), 26)
+            expect("new viewport holds the third-page reply", lambda: pages.count(50) == 3 and window(26, 50))
+            type_keys(click(32, row(26)))
+            expect("open a menu over the second duplicate before leaving the view", song_menu)
+            type_keys(wheel(24, 8))
+            type_keys(b"\x1b")
+            type_keys(b"1")
+            expect("leave playlist while its page is held", lambda: seen("/ Search"))
+            type_keys(b"\x1b")
+            expect("restored playlist requests third page again", lambda: pages.count(50) == 4 and window(26, 50))
+            type_keys(click(32, row(27)))
+            expect("fresh menu belongs to a different occurrence", lambda: song_menu() and "Track 27" in screen.display[line_with("SONG ACTIONS")])
+            playlist_release[3].set()
+            expect("old reply reaches the dropped connection", playlist_finished[3].is_set)
+            drain(.12)
+            assert song_menu() and not seen("56 results")
+            playlist_release[4].set()
+            expect("fresh prefetch updates rows without closing the new menu", lambda: seen("56 results") and song_menu())
+            assert "Track 27" in screen.display[line_with("SONG ACTIONS")]
+            type_keys(b"\x1b")
+
             type_keys(click(32, row(26)))
             expect("private duplicate selected before account rotation", song_menu)
             token_file = conf / "music-user-token"
@@ -302,7 +357,12 @@ with tempfile.TemporaryDirectory(prefix="rustune-pty-playlist-") as folder:
 
             type_keys(b"4")
             expect("Minimal queue first page", lambda: seen("#1014"))
-            type_keys(wheel(32, 10))
+            type_keys(wheel(32, 10), 5)
+            expect("only one QueuePage is pending for the boundary", lambda: queue_pages.count(15) == 1)
+            type_keys(b" ")
+            expect("Toggle reaches IPC before the held QueuePage is released", toggle_received.is_set)
+            assert not queue_release.is_set() and queue_pages.count(15) == 1
+            queue_release.set()
             expect("queue crosses to page 2 and retains off-page selection", lambda: seen("#1015") and seen("Selected #1 offscreen"))
             type_keys(wheel(32, 10, False))
             expect("queue wheel returns across the boundary", lambda: seen("#1014") and not seen("Selected #1 offscreen"))
@@ -537,6 +597,9 @@ with tempfile.TemporaryDirectory(prefix="rustune-pty-playlist-") as folder:
             tui.wait(timeout=5)
         os.close(master)
         stop.set()
+        queue_release.set()
+        for gate in playlist_release.values():
+            gate.set()
         server.shutdown()
         server.server_close()
 

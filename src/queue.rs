@@ -348,6 +348,23 @@ impl Queue {
         }
         result
     }
+    /// Upcoming traversal restricted to `wanted` entries: their 1-based ranks.
+    /// Bounded independently of the queue length for paged responses.
+    pub fn upcoming_ranks_for(
+        &self,
+        wanted: &std::collections::HashSet<u64>,
+    ) -> std::collections::HashMap<u64, usize> {
+        let mut ranks = std::collections::HashMap::new();
+        if wanted.is_empty() {
+            return ranks;
+        }
+        for (position, id) in self.upcoming_ids().into_iter().enumerate() {
+            if wanted.contains(&id) {
+                ranks.insert(id, position + 1);
+            }
+        }
+        ranks
+    }
     pub fn advance(&mut self, manual: bool) -> Option<usize> {
         let next = self.candidate(manual)?;
         let forward = self.forward.clone();

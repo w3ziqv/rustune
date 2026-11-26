@@ -171,3 +171,46 @@ fn projected_order_exposes_forward_history_and_priority_in_what_will_play() {
     let x = q.tracks[1].entry_id;
     assert_eq!(q.upcoming_ids(), vec![x, target]);
 }
+
+#[test]
+fn upcoming_ranks_for_match_the_traversal_in_every_mode() {
+    use std::collections::{HashMap, HashSet};
+    let ranks_of = |q: &Queue| {
+        let wanted: HashSet<u64> = q.tracks.iter().map(|e| e.entry_id).collect();
+        q.upcoming_ranks_for(&wanted)
+    };
+    let expected = |q: &Queue| {
+        q.upcoming_ids()
+            .iter()
+            .enumerate()
+            .map(|(position, id)| (*id, position + 1))
+            .collect::<HashMap<u64, usize>>()
+    };
+    let mut q = session();
+    q.select(1);
+    assert_eq!(ranks_of(&q), expected(&q));
+    q.repeat = Repeat::All;
+    assert_eq!(ranks_of(&q), expected(&q), "repeat-all cycle ranks");
+    q.insert_next(vec![song("x")], QueueContext::single())
+        .unwrap();
+    assert_eq!(ranks_of(&q), expected(&q), "forward/priority ranks");
+    q.select(0);
+    q.clear_upcoming();
+    assert!(
+        ranks_of(&q).is_empty(),
+        "stop-after-current has no upcoming"
+    );
+}
+
+#[test]
+fn upcoming_ranks_for_return_only_requested_entries() {
+    use std::collections::HashSet;
+    let mut q = session();
+    q.select(0);
+    let first = q.tracks[0].entry_id;
+    let window: HashSet<u64> = [q.tracks[1].entry_id].into_iter().collect();
+    let ranks = q.upcoming_ranks_for(&window);
+    assert_eq!(ranks, [(q.tracks[1].entry_id, 1)].into_iter().collect());
+    let empty = q.upcoming_ranks_for(&[first].into_iter().collect());
+    assert!(empty.is_empty(), "the current entry is not upcoming");
+}

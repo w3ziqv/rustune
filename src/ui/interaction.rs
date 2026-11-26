@@ -39,6 +39,9 @@ pub(super) struct SongActions {
     revision: u64,
     entry_id: Option<u64>,
     selected: usize,
+    /// Page request that, once it actually applies the wheel-initiated shift,
+    /// closes this menu; failures, retries and view changes keep it open.
+    pending_scroll: Option<Box<Request>>,
 }
 impl SongActions {
     fn labels(&self) -> &'static [&'static str] {
@@ -172,6 +175,10 @@ impl App {
         self.playlist_view = view.playlist_view;
         self.playlist_top = view.playlist_top;
         self.list_view = view.list_view;
+        // A restored view re-fetches its pending pages: the pre-leave wheel
+        // shift intent must not consume the restored reply and move rows.
+        self.list_view.stop_append();
+        self.list_view.forget_placement();
         self.rows_revision = self.rows_revision.wrapping_add(1);
         self.nav_top = None;
         self.detail_scroll = 0;
@@ -279,7 +286,66 @@ impl App {
             queue_index: (self.screen == Screen::Queue)
                 .then_some(self.queue_offset + self.selected),
             selected: 0,
+            pending_scroll: None,
         });
+    }
+    /// Bind the wheel-initiated close to the page application that completes
+    /// the shift: a newly issued request first, else the one already in
+    /// flight. Without any pending page the rows already moved, so the menu
+    /// closes now.
+    pub(super) fn defer_menu_scroll(&mut self, request: Option<Request>) {
+        let bound = request.or_else(|| {
+            if self.browse_state == BrowseState::Loading {
+                self.browse_retry.clone()
+            } else if self.screen == Screen::Queue {
+                self.queue_request.map(|offset| self.queue_page(offset))
+            } else {
+                None
+            }
+        });
+        match bound.map(Box::new) {
+            Some(bound) => {
+                if let Some(menu) = self.song_actions.as_mut() {
+                    menu.pending_scroll = Some(bound);
+                }
+            }
+            None => self.song_actions = None,
+        }
+    }
+    /// Close the open menu only when this applied page is the very shift the
+    /// wheel that opened the intent started.
+    pub(super) fn close_menu_after_scroll(&mut self, applied: &Request) {
+        if let Some(menu) = self.song_actions.as_ref()
+            && let Some(pending) = menu.pending_scroll.as_ref()
+            && Self::page_request_matches(pending, applied)
+        {
+            self.song_actions = None;
+        }
+    }
+    pub(super) fn queue_page(&self, offset: usize) -> Request {
+        Request::QueuePage {
+            offset,
+            annotated: true,
+        }
+    }
+    fn page_request_matches(pending: &Request, applied: &Request) -> bool {
+        match (pending, applied) {
+            (
+                Request::Browse {
+                    kind: pending_kind,
+                    term: pending_term,
+                    next: pending_next,
+                },
+                Request::Browse { kind, term, next },
+            ) => pending_kind == kind && pending_term == term && pending_next == next,
+            (
+                Request::QueuePage {
+                    offset: pending, ..
+                },
+                Request::QueuePage { offset, .. },
+            ) => pending == offset,
+            _ => false,
+        }
     }
     pub(super) fn song_menu_key(&mut self, key: KeyCode) -> (bool, Option<Request>) {
         if self.song_actions.is_none() {
@@ -291,6 +357,19 @@ impl App {
             }
             KeyCode::Up | KeyCode::Char('k') => self.scroll_song_menu(Direction::Up),
             KeyCode::Down | KeyCode::Char('j') => self.scroll_song_menu(Direction::Down),
+            // Keep the page retry reachable while the menu is open: a pending
+            // page close waits for its application, so a failed fetch must be
+            // retryable without leaving the menu first.
+            KeyCode::Char('R') => {
+                let request = if self.screen == Screen::Queue {
+                    self.queue_retry.map(|offset| self.queue_page(offset))
+                } else if self.browse_state == BrowseState::Limited {
+                    None
+                } else {
+                    self.browse_retry.clone().or(Some(Request::RetryOperation))
+                };
+                return (false, request);
+            }
             KeyCode::Enter | KeyCode::Right => {
                 let menu = self.song_actions.take().expect("song menu exists");
                 if menu.queue_index.is_some()
