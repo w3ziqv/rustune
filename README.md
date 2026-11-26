@@ -18,7 +18,7 @@ A native Linux player written in Rust. Graphite panels, one accent, and a small 
 - **Lyrics on their own.** Open a dedicated Lyrics view, follow the current verse or scroll at your own pace. Preview another song's lyrics without interrupting playback.
 - **Your choice of cover.** Keep the pixelated terminal look or switch to a regular image in a compatible Kitty/iTerm2 terminal. One setting applies everywhere. Unsupported terminals explain the limitation; they do not silently substitute pixels.
 - **Settings that do something.** Themes, artwork, lyrics, resource profiles, local token storage and a real ten-band equalizer. Audio information describes the actual backend; unavailable quality modes are not pretend controls.
-- **Keyboard first.** Seven main destinations, consistent back navigation, configurable shortcuts and mouse scrolling. Help shows your current bindings.
+- **Keyboard and mouse.** Scroll the panel under the pointer. Click a song to open Song Actions and scroll over the menu to choose an option. Scroll over the exposed song list to close the menu and move the list in one step. The selection stays put. If it scrolls out of view, press Enter to bring it back, then Enter again for actions. Set `mouse = false` in the config to disable mouse input. Help shows your current bindings.
 - **Bounded background work.** Lazy artwork, one source image and one rendered cover, cached lyric wrapping, bounded result pages and redraws when visible state changes.
 
 Rustune is experimental. A saved token means **saved locally**, not authenticated. Playback requires an active Apple Music subscription, accepted user credentials and a compatible proprietary CDM installed privately. A Music User Token alone is not a playback engine.
@@ -39,7 +39,7 @@ Screenshots and their validation context are recorded in the [v0.3 screenshot re
 
 ## Installation
 
-Install the v0.5.1 release on x86_64 GNU/Linux with glibc 2.39 or newer.
+Install the v0.6.0 release on x86_64 GNU/Linux with glibc 2.39 or newer.
 The command needs Bash, curl and Python 3.
 
 ```bash
@@ -48,7 +48,7 @@ work=$(mktemp -d)
 cleanup() { rm -f -- "$work/install.py"; rmdir -- "$work"; }
 trap cleanup EXIT
 curl --disable --fail --silent --show-error --location --proto "=https" --proto-redir "=https" --connect-timeout 15 --max-time 60 --max-filesize 65536 \
-  https://raw.githubusercontent.com/w3ziqv/rustune/v0.5.1/scripts/install.py -o "$work/install.py"
+  https://raw.githubusercontent.com/w3ziqv/rustune/v0.6.0/scripts/install.py -o "$work/install.py"
 python3 "$work/install.py"'
 ```
 

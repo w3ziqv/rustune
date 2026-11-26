@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.6.0
+
+- Scroll lists, text and dialogs under the pointer, including across result and
+  queue pages. Long views keep their scroll position separate from the selection.
+- Click a song to open its actions. Scroll inside the menu to choose an action,
+  or over the exposed song list to close the menu and scroll there.
+- Access clipped panels and menu actions in short terminals. Paged navigation
+  retains the previous rows if a load fails and can be retried with `R`.
+
 ## v0.5.1
 
 - One-command, checksum-verified installation for x86_64 GNU/Linux with glibc 2.39 or newer.

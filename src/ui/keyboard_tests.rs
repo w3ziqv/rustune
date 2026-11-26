@@ -680,6 +680,12 @@ async fn audio_information_shows_local_checks_without_claiming_playback() {
     assert!(rendered.contains("drm/libwidevinecdm.so"));
     assert!(!rendered.contains("fixture-token"));
     press(&mut app, KeyCode::Down);
+    assert_eq!(
+        app.audio_info_scroll, 0,
+        "do not scroll past the end of a full panel"
+    );
+    app.viewport = Size::new(70, 12);
+    press(&mut app, KeyCode::Down);
     assert_eq!(app.audio_info_scroll, 1);
     assert!(press(&mut app, KeyCode::Char('R')).is_none());
     assert!(app.diagnostics.is_none());

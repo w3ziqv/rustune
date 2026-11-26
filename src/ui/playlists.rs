@@ -50,10 +50,18 @@ impl App {
         if self.playlist_tracks() {
             let main = navigation::layout(self.viewport, self.screen).main;
             self.playlist_top = self
-                .playlist_range(usize::from(
-                    main.height.saturating_sub(self.catalog_header_height()),
-                ))
+                .playlist_range(usize::from(self.catalog_areas(main)[1].height))
                 .start;
+        }
+    }
+
+    fn playlist_near_end(&self) -> bool {
+        let main = navigation::layout(self.viewport, self.screen).main;
+        let height = usize::from(self.catalog_areas(main)[1].height);
+        if self.list_view.top.is_some() {
+            self.list_range(height).end.saturating_add(PREFETCH_MARGIN) >= self.items.len()
+        } else {
+            self.selected.saturating_add(PREFETCH_MARGIN) >= self.items.len()
         }
     }
 
@@ -61,8 +69,7 @@ impl App {
         if !self.playlist_tracks()
             || self.browse_state == BrowseState::Loading
             || (!requested
-                && (self.browse_state != BrowseState::Ready
-                    || self.selected.saturating_add(PREFETCH_MARGIN) < self.items.len()))
+                && (self.browse_state != BrowseState::Ready || !self.playlist_near_end()))
         {
             return None;
         }
@@ -95,6 +102,7 @@ impl App {
         }
     }
     pub(super) fn playlist_name(&mut self, queue: bool) {
+        self.dialog_scroll = 0;
         self.playlist_dialog = Some(PlaylistDialog::Name {
             source: if queue {
                 PlaylistWriteSource::Queue {
@@ -121,6 +129,7 @@ impl App {
                 playlist.title
             ),
         };
+        self.dialog_scroll = 0;
         self.playlist_dialog = Some(PlaylistDialog::Confirm {
             request: Box::new(Request::PlaylistWrite {
                 key: ipc::operation_key(),
@@ -205,10 +214,12 @@ impl App {
                 }
                 KeyCode::Backspace => {
                     text.pop();
+                    self.dialog_scroll = usize::MAX;
                     Some(PlaylistDialog::Name { source, text })
                 }
                 KeyCode::Char(c) if !c.is_control() && text.len() + c.len_utf8() <= 200 => {
                     text.push(c);
+                    self.dialog_scroll = usize::MAX;
                     Some(PlaylistDialog::Name { source, text })
                 }
                 _ => Some(PlaylistDialog::Name { source, text }),
@@ -224,6 +235,7 @@ impl App {
     }
     pub(super) fn playlist_paste(&mut self, text: &str) {
         if let Some(PlaylistDialog::Name { text: entry, .. }) = &mut self.playlist_dialog {
+            self.dialog_scroll = usize::MAX;
             for c in text.chars().filter(|c| !c.is_control()) {
                 if entry.len() + c.len_utf8() > 200 {
                     break;
@@ -232,67 +244,88 @@ impl App {
             }
         }
     }
-    pub(super) fn render_playlist_dialog(&self, f: &mut Frame, p: Palette) {
-        let Some(dialog) = &self.playlist_dialog else {
-            return;
-        };
-        let size = f.area();
-        let w = size.width.min(78);
-        let h = size.height.min(18);
-        let area = Rect::new((size.width - w) / 2, (size.height - h) / 2, w, h);
-        f.render_widget(Clear, area);
-        let (title, text) = match dialog {
-            PlaylistDialog::Actions { playlist, selected } => {
-                let rows = ACTIONS
-                    .iter()
-                    .enumerate()
-                    .map(|(i, label)| {
-                        format!(
-                            "{} {}{}",
-                            if i == *selected { "›" } else { " " },
-                            label,
-                            if i == 4 && !playlist.can_edit {
-                                " (read-only)"
-                            } else {
-                                ""
-                            }
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                (
-                    " PLAYLIST ACTIONS ",
-                    format!(
-                        "{}\n\n{rows}\n\n↑/↓ choose · Enter confirm · Esc back",
-                        playlist.title
-                    ),
-                )
-            }
+    pub(super) fn playlist_dialog_area(area: Rect) -> Rect {
+        scroll::centered(area, 78, 18)
+    }
+
+    fn playlist_dialog_inner(area: Rect) -> Rect {
+        Block::bordered()
+            .padding(Padding::horizontal(1))
+            .inner(area)
+    }
+
+    fn playlist_form(dialog: &PlaylistDialog) -> (&'static str, String) {
+        match dialog {
             PlaylistDialog::Name { text, .. } => (
                 " NEW APPLE MUSIC PLAYLIST ",
                 format!(
-                    "Playlist name (max 200 UTF-8 bytes):\n\n{text}▏\n\nEnter reviews account write · Esc cancels\nNo account changes until the confirmation step."
+                    "Playlist name (max 200 UTF-8 bytes):\nEnter reviews account write · Esc cancels\nNo account changes until confirmation.\n\n{text}▏"
                 ),
             ),
             PlaylistDialog::Confirm { summary, .. } => (
                 " CONFIRM ACCOUNT WRITE ",
-                format!("{summary}\n\nQueue and audio remain unchanged."),
+                format!(
+                    "Enter SEND to Apple · Esc CANCEL\n\n{summary}\n\nQueue and audio remain unchanged.\nLost response: inspect Apple before a new operation."
+                ),
             ),
+            PlaylistDialog::Actions { .. } => unreachable!("actions use their own rows"),
+        }
+    }
+
+    pub(super) fn scroll_playlist_dialog(&mut self, area: Rect, direction: Direction) {
+        match &mut self.playlist_dialog {
+            Some(PlaylistDialog::Actions { selected, .. }) => {
+                *selected = direction.step(*selected, ACTIONS.len() - 1);
+            }
+            Some(dialog) => {
+                let body = Self::playlist_dialog_inner(area);
+                if !body.is_empty() {
+                    let (_, text) = Self::playlist_form(dialog);
+                    let widget = scroll::paragraph(text);
+                    self.dialog_scroll =
+                        scroll::text_offset(widget, body, self.dialog_scroll, direction);
+                }
+            }
+            None => {}
+        }
+    }
+
+    pub(super) fn render_playlist_dialog(&self, f: &mut Frame, p: Palette) {
+        let Some(dialog) = &self.playlist_dialog else {
+            return;
         };
+        let area = Self::playlist_dialog_area(f.area());
+        f.render_widget(Clear, area);
+        let style = Style::default().fg(p.fg).bg(p.bg);
         let block = Block::bordered()
-            .title(title)
             .padding(Padding::horizontal(1))
-            .style(Style::default().fg(p.fg).bg(p.bg));
+            .style(style);
         let inner = block.inner(area);
-        f.render_widget(block, area);
-        let [body, footer] =
-            Layout::vertical([Constraint::Fill(1), Constraint::Length(3)]).areas(inner);
-        f.render_widget(Paragraph::new(if matches!(dialog,PlaylistDialog::Confirm{..}){"Enter SEND to Apple · Esc CANCEL\nLost response: inspect Apple before a new operation."}else{"Enter confirms · Esc back"}).style(Style::default().fg(p.fg).bg(p.bg)),footer);
-        f.render_widget(
-            Paragraph::new(text)
-                .wrap(Wrap { trim: false })
-                .style(Style::default().fg(p.fg).bg(p.bg)),
-            body,
-        );
+        if let PlaylistDialog::Actions { playlist, selected } = dialog {
+            f.render_widget(block.title(" PLAYLIST ACTIONS "), area);
+            let [title, actions, hint] = scroll::menu_rows(inner);
+            f.render_widget(Paragraph::new(playlist.title.as_str()), title);
+            let range = visible_range(*selected, ACTIONS.len(), actions.height as usize);
+            let rows = range.map(|i| {
+                let marker = if i == *selected { "›" } else { " " };
+                let suffix = if i == 4 && !playlist.can_edit {
+                    " (read-only)"
+                } else {
+                    ""
+                };
+                ListItem::new(format!("{marker} {}{suffix}", ACTIONS[i]))
+            });
+            f.render_widget(List::new(rows), actions);
+            scroll::indicator(f, actions, *selected, ACTIONS.len() - 1, p);
+            f.render_widget(
+                Paragraph::new("↑/↓ or wheel · Enter confirm · Esc back"),
+                hint,
+            );
+        } else {
+            let (title, text) = Self::playlist_form(dialog);
+            f.render_widget(block.title(title), area);
+            let widget = scroll::paragraph(text).style(style);
+            scroll::render_text(f, widget, inner, self.dialog_scroll, p);
+        }
     }
 }

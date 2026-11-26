@@ -193,10 +193,11 @@ fn parse_escape(bytes: &[u8]) -> Option<InputEvent> {
             _ => MouseButton::Right,
         };
         let kind = if code & 64 != 0 {
-            if code & 1 == 0 {
-                MouseEventKind::ScrollUp
-            } else {
-                MouseEventKind::ScrollDown
+            match code & 3 {
+                0 => MouseEventKind::ScrollUp,
+                1 => MouseEventKind::ScrollDown,
+                2 => MouseEventKind::ScrollLeft,
+                _ => MouseEventKind::ScrollRight,
             }
         } else if final_byte == b'm' {
             MouseEventKind::Up(button)

@@ -41,6 +41,23 @@ fn paste_unicode_keys_arrows_function_keys_and_mouse_are_parsed_incrementally() 
 }
 
 #[test]
+fn sgr_mouse_wheel_preserves_vertical_and_horizontal_directions() {
+    let mut parser = Parser::default();
+    for (code, kind) in [
+        (64, MouseEventKind::ScrollUp),
+        (65, MouseEventKind::ScrollDown),
+        (66, MouseEventKind::ScrollLeft),
+        (67, MouseEventKind::ScrollRight),
+    ] {
+        let report = format!("\x1b[<{code};12;20M");
+        let event = report.bytes().find_map(|byte| parser.feed(byte));
+        assert!(
+            matches!(event, Some(InputEvent::Mouse(m)) if m.column == 11 && m.row == 19 && m.kind == kind)
+        );
+    }
+}
+
+#[test]
 fn control_c_cancels_an_unterminated_escape_or_paste_without_retaining_input() {
     for prefix in [
         b"\x1b[".as_slice(),

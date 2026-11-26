@@ -81,31 +81,28 @@ impl App {
         }
         (false, None)
     }
+    pub(super) fn album_menu_area(area: Rect) -> Rect {
+        scroll::centered(area, 66, 10)
+    }
+
+    pub(super) fn scroll_album_menu(&mut self, direction: Direction) {
+        if let Some(menu) = &mut self.album_actions {
+            menu.selected = direction.step(menu.selected, ACTIONS.len() - 1);
+        }
+    }
+
     pub(super) fn render_album_menu(&self, f: &mut Frame, p: Palette) {
         let Some(menu) = &self.album_actions else {
             return;
         };
-        let size = f.area();
-        let width = size.width.min(66);
-        let height = size.height.min(10);
-        let area = Rect::new(
-            (size.width - width) / 2,
-            (size.height - height) / 2,
-            width,
-            height,
-        );
+        let area = Self::album_menu_area(f.area());
         f.render_widget(Clear, area);
         let block = Block::bordered()
             .title(" ALBUM ACTIONS ")
             .style(Style::default().fg(p.fg).bg(p.bg));
         let inner = block.inner(area);
         f.render_widget(block, area);
-        let [title, actions, hint] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Fill(1),
-            Constraint::Length(2),
-        ])
-        .areas(inner);
+        let [title, actions, hint] = scroll::menu_rows(inner);
         f.render_widget(Paragraph::new(menu.album.title.as_str()), title);
         let rows = visible_range(menu.selected, 4, actions.height as usize)
             .map(|i| {
@@ -122,6 +119,7 @@ impl App {
             })
             .collect::<Vec<_>>();
         f.render_widget(List::new(rows), actions);
+        scroll::indicator(f, actions, menu.selected, ACTIONS.len() - 1, p);
         f.render_widget(Paragraph::new("↑/↓ choose · Enter confirm · Esc back\nReplace/clear can be undone with u; audio position is not restored"),hint);
     }
     pub(super) fn song_request(&self, track: Track, intent: usize) -> Request {

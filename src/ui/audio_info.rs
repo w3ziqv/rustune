@@ -23,34 +23,37 @@ fn body(app: &App) -> Vec<String> {
     lines
 }
 
-pub(super) fn scroll(app: &mut App, down: bool) {
-    app.audio_info_scroll = if down {
-        (app.audio_info_scroll + 1).min(body(app).len().saturating_sub(1))
-    } else {
-        app.audio_info_scroll.saturating_sub(1)
-    };
+fn areas(area: Rect) -> [Rect; 2] {
+    let heading = area.height.saturating_sub(1).min(2);
+    Layout::vertical([Constraint::Length(heading), Constraint::Fill(1)]).areas(area)
+}
+
+fn paragraph(app: &App) -> Paragraph<'static> {
+    scroll::paragraph(body(app).into_iter().map(Line::from).collect::<Vec<_>>())
+}
+
+pub(super) fn scroll(app: &mut App, area: Rect, direction: Direction) {
+    let content = areas(area)[1];
+    app.audio_info_scroll =
+        scroll::text_offset(paragraph(app), content, app.audio_info_scroll, direction);
+}
+
+pub(super) fn hit(area: Rect, point: ratatui::layout::Position) -> bool {
+    areas(area)[1].contains(point)
 }
 
 pub(super) fn render(app: &App, frame: &mut Frame, area: Rect, palette: Palette) {
-    let [heading, content] =
-        Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).areas(area);
+    let [heading, content] = areas(area);
     frame.render_widget(
         Paragraph::new("AUDIO INFORMATION\n↑/↓ Scroll · R Refresh · Esc Back")
             .style(Style::default().fg(palette.accent)),
         heading,
     );
-    let lines = body(app);
-    let offset = app.audio_info_scroll.min(lines.len().saturating_sub(1));
-    frame.render_widget(
-        Paragraph::new(
-            lines
-                .into_iter()
-                .skip(offset)
-                .map(Line::from)
-                .collect::<Vec<_>>(),
-        )
-        .style(Style::default().fg(palette.fg))
-        .wrap(Wrap { trim: false }),
+    scroll::render_text(
+        frame,
+        paragraph(app).style(Style::default().fg(palette.fg)),
         content,
+        app.audio_info_scroll,
+        palette,
     );
 }

@@ -1,9 +1,9 @@
 //! The selected player composition: cover left, metadata/lyrics right, controls below.
-use super::{App, Focus, Palette, Screen, navigation, time, visible_range};
+use super::{App, Direction, Focus, Palette, Screen, navigation, scroll, time, visible_range};
 use crate::{keys, lyrics::LyricsState};
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Layout, Rect, Size},
+    layout::{Alignment, Constraint, Layout, Position, Rect, Size},
     style::{Modifier, Style},
     text::Line,
     widgets::{Block, Gauge, Paragraph, Wrap},
@@ -27,15 +27,15 @@ pub(super) struct Areas {
     pub status: Rect,
 }
 pub(super) fn areas(area: Rect, artwork: bool) -> Areas {
-    let [_header, body, progress, controls, status] = Layout::vertical([
-        Constraint::Length(0),
+    let compact = area.height < 16;
+    let [body, progress, controls, status] = Layout::vertical([
         Constraint::Fill(1),
-        Constraint::Length(2),
-        Constraint::Length(3),
-        Constraint::Length(1),
+        Constraint::Length(if compact { 1 } else { 2 }),
+        Constraint::Length(if compact { 1 } else { 3 }),
+        Constraint::Length(u16::from(area.height >= 5)),
     ])
     .areas(area);
-    let body = body.inner(ratatui::layout::Margin::new(1, 1));
+    let body = body.inner(ratatui::layout::Margin::new(1, u16::from(!compact)));
     let (cover, right) = if artwork && area.width >= 70 && body.height >= 8 {
         let [left, _, right] = Layout::horizontal([
             Constraint::Percentage(42),
@@ -52,8 +52,13 @@ pub(super) fn areas(area: Rect, artwork: bool) -> Areas {
     } else {
         (None, body)
     };
+    let meta_height = if compact {
+        right.height.saturating_sub(2).min(2)
+    } else {
+        6
+    };
     let [metadata, lyrics] =
-        Layout::vertical([Constraint::Length(6), Constraint::Fill(1)]).areas(right);
+        Layout::vertical([Constraint::Length(meta_height), Constraint::Fill(1)]).areas(right);
     Areas {
         cover,
         metadata,
@@ -68,7 +73,7 @@ pub(super) fn buttons(area: Rect) -> Vec<Rect> {
         .split(area)
         .to_vec()
 }
-fn art_enabled(app: &App) -> bool {
+pub(super) fn art_enabled(app: &App) -> bool {
     app.config.artwork
         && app
             .status
@@ -225,6 +230,11 @@ pub(super) fn render(app: &App, f: &mut Frame, area: Rect, p: Palette) {
             } else {
                 ratatui::widgets::BorderType::Plain
             });
+        let block = if area.height >= 3 {
+            block
+        } else {
+            Block::new()
+        };
         f.render_widget(
             Paragraph::new(format!("{title} [{key}]"))
                 .style(if focused {
@@ -253,10 +263,7 @@ pub(super) fn render(app: &App, f: &mut Frame, area: Rect, p: Palette) {
     f.render_widget(Paragraph::new(status), a.status);
 }
 
-pub(super) fn render_lyrics(app: &App, f: &mut Frame, area: Rect, p: Palette) {
-    if area.height == 0 || area.width == 0 {
-        return;
-    }
+fn lyrics_state(app: &App) -> Result<&std::sync::Arc<crate::lyrics::Lyrics>, &'static str> {
     let request = app.lyrics_request();
     let result = app
         .lyrics_result
@@ -276,30 +283,88 @@ pub(super) fn render_lyrics(app: &App, f: &mut Frame, area: Rect, p: Palette) {
         }
     };
     if let Some(message) = message {
-        f.render_widget(
-            Paragraph::new(message)
-                .alignment(Alignment::Center)
-                .wrap(Wrap { trim: false }),
-            area,
-        );
+        return Err(message);
+    }
+    match result.map(|r| &r.state) {
+        Some(LyricsState::Found(lyrics)) => Ok(lyrics),
+        _ => Err("No lyrics available"),
+    }
+}
+
+fn lyric_content(area: Rect) -> Rect {
+    Rect::new(
+        area.x,
+        area.y,
+        area.width,
+        area.height - u16::from(area.height > 1),
+    )
+}
+
+pub(super) fn lyrics_hit(app: &App, area: Rect, point: Position) -> bool {
+    if lyrics_state(app).is_ok() {
+        lyric_content(area).contains(point)
+    } else {
+        area.contains(point)
+    }
+}
+
+pub(super) fn scroll_lyrics(app: &mut App, area: Rect, direction: Direction) {
+    if area.is_empty() {
         return;
     }
-    let Some(LyricsState::Found(lyrics)) = result.map(|r| &r.state) else {
+    let position = match lyrics_state(app) {
+        Ok(lyrics) => {
+            let content = scroll::text_area(lyric_content(area));
+            let rows = app.lyric_layout.rows(lyrics, content.width);
+            let height = usize::from(content.height);
+            let max = rows.len().saturating_sub(height);
+            let current = app.lyrics_scroll.unwrap_or_else(|| {
+                let active = lyrics
+                    .active_line(app.displayed_position())
+                    .and_then(|index| rows.iter().position(|(line, _)| *line == index))
+                    .unwrap_or(0);
+                visible_range(active, rows.len(), height).start
+            });
+            direction.step(current.min(max), max)
+        }
+        Err(message) => scroll::text_offset(
+            scroll::paragraph(message),
+            area,
+            app.lyrics_scroll.unwrap_or(0),
+            direction,
+        ),
+    };
+    app.lyrics_scroll = Some(position);
+}
+
+pub(super) fn render_lyrics(app: &App, f: &mut Frame, area: Rect, p: Palette) {
+    if area.is_empty() {
         return;
+    }
+    let lyrics = match lyrics_state(app) {
+        Ok(lyrics) => lyrics,
+        Err(message) => {
+            let widget = scroll::paragraph(message).alignment(Alignment::Center);
+            scroll::render_text(f, widget, area, app.lyrics_scroll.unwrap_or(0), p);
+            return;
+        }
     };
     let position = app.displayed_position();
     let active = lyrics.active_line(position);
-    let wrapped = app.lyric_layout.rows(lyrics, area.width);
+    let content = lyric_content(area);
+    let text = scroll::text_area(content);
+    let wrapped = app.lyric_layout.rows(lyrics, text.width);
     let active_row = active
         .and_then(|index| wrapped.iter().position(|(line, _)| *line == index))
         .unwrap_or(0);
-    let height = usize::from(area.height.saturating_sub(1));
+    let height = usize::from(content.height);
     let range = if let Some(top) = app.lyrics_scroll {
         let top = top.min(wrapped.len().saturating_sub(height));
         top..(top + height).min(wrapped.len())
     } else {
         visible_range(active_row, wrapped.len(), height)
     };
+    let start = range.start;
     let rows: Vec<_> = range
         .map(|i| {
             let (line, range) = &wrapped[i];
@@ -315,13 +380,19 @@ pub(super) fn render_lyrics(app: &App, f: &mut Frame, area: Rect, p: Palette) {
                 })
         })
         .collect();
-    f.render_widget(
-        Paragraph::new(rows),
-        Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1)),
-    );
+    f.render_widget(Paragraph::new(rows), text);
+    scroll::indicator(f, content, start, wrapped.len().saturating_sub(height), p);
+    if area.height == 1 {
+        return;
+    }
     f.render_widget(
         Paragraph::new(format!(
-            "LRCLIB · {} · {} follow · {} reload",
+            "LRCLIB · {} · {} · {} follow · {} reload",
+            if app.lyrics_scroll.is_some() {
+                "manual"
+            } else {
+                "following"
+            },
             if lyrics.synced {
                 "synced"
             } else {
@@ -342,5 +413,6 @@ pub(super) fn render_lyrics(app: &App, f: &mut Frame, area: Rect, p: Palette) {
 }
 
 pub(super) fn standalone_lyrics_areas(area: Rect) -> [Rect; 2] {
-    Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area)
+    let header = area.height.saturating_sub(1).min(3);
+    Layout::vertical([Constraint::Length(header), Constraint::Fill(1)]).areas(area)
 }

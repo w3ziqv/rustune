@@ -48,7 +48,20 @@ pub(super) enum Focus {
     Player(usize),
 }
 
-use ratatui::layout::{Constraint, Layout, Rect, Size};
+use ratatui::{
+    layout::{Constraint, Layout, Rect, Size},
+    widgets::{Block, Borders, Padding},
+};
+
+pub(super) fn usable(size: Size) -> bool {
+    size.width >= 20 && size.height >= 5
+}
+
+pub(super) fn nav_block() -> Block<'static> {
+    Block::new()
+        .borders(Borders::RIGHT)
+        .padding(Padding::top(1))
+}
 pub(super) struct ShellAreas {
     pub top: Rect,
     pub nav: Option<Rect>,
@@ -61,7 +74,11 @@ pub(super) fn layout(size: Size, screen: Screen) -> ShellAreas {
     let [top, body, player, status] = Layout::vertical([
         Constraint::Length(2),
         Constraint::Fill(1),
-        Constraint::Length(if screen == Screen::NowPlaying { 0 } else { 3 }),
+        Constraint::Length(if screen == Screen::NowPlaying || size.height < 10 {
+            0
+        } else {
+            3
+        }),
         Constraint::Length(1),
     ])
     .areas(Rect::new(0, 0, size.width, size.height));
@@ -86,7 +103,7 @@ pub(super) fn layout(size: Size, screen: Screen) -> ShellAreas {
     ShellAreas {
         top,
         nav,
-        main: main.inner(ratatui::layout::Margin::new(2, 1)),
+        main: main.inner(ratatui::layout::Margin::new(2, u16::from(main.height > 3))),
         detail,
         player,
         status,

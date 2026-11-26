@@ -1,7 +1,22 @@
 //! Keyboard controls and honest live state for the native stereo equalizer.
 use super::*;
 use rustune_core::equalizer::{EqSettings, FREQUENCIES, PRESETS};
+pub(super) fn areas(area: Rect) -> [Rect; 3] {
+    let header = area.height.saturating_sub(1).min(3);
+    let hint = area.height.saturating_sub(header + 1).min(3);
+    Layout::vertical([
+        Constraint::Length(header),
+        Constraint::Fill(1),
+        Constraint::Length(hint),
+    ])
+    .areas(area)
+}
+
 impl App {
+    pub(super) fn scroll_equalizer(&mut self, direction: Direction) {
+        self.eq_selected = direction.step(self.eq_selected, FREQUENCIES.len() + 2);
+    }
+
     fn eq_settings(&self) -> EqSettings {
         self.eq_pending
             .as_ref()
@@ -85,12 +100,7 @@ impl App {
         } else {
             "SAVED · applies on Play"
         };
-        let [header, list, hint] = Layout::vertical([
-            Constraint::Length(3),
-            Constraint::Fill(1),
-            Constraint::Length(3),
-        ])
-        .areas(area);
+        let [header, list, hint] = areas(area);
         f.render_widget(
             Paragraph::new(format!(
                 "EQUALIZER · {state}\nAutomatic boost headroom: {:+.1} dB",
@@ -135,7 +145,9 @@ impl App {
             ));
         }
         labels.push(format!("Preamp     {}", slider(settings.preamp_db)));
-        let rows = visible_range(self.eq_selected, labels.len(), usize::from(list.height))
+        let range = visible_range(self.eq_selected, labels.len(), usize::from(list.height));
+        let start = range.start;
+        let rows = range
             .map(|i| {
                 ListItem::new(format!(
                     "{} {}",
@@ -150,6 +162,13 @@ impl App {
             })
             .collect::<Vec<_>>();
         f.render_widget(List::new(rows), list);
+        scroll::indicator(
+            f,
+            list,
+            start,
+            labels.len().saturating_sub(list.height as usize),
+            p,
+        );
         f.render_widget(Paragraph::new("↑/↓ select · ←/→ adjust 0.5 dB · Enter toggle/reset\nb bypass · r Flat · Esc menu · Space play/pause\nBands above the audio Nyquist frequency are bypassed.").style(Style::default().fg(p.muted)),hint);
     }
 }

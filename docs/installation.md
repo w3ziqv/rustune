@@ -12,12 +12,12 @@ work=$(mktemp -d)
 cleanup() { rm -f -- "$work/install.py"; rmdir -- "$work"; }
 trap cleanup EXIT
 curl --disable --fail --silent --show-error --location --proto "=https" --proto-redir "=https" --connect-timeout 15 --max-time 60 --max-filesize 65536 \
-  https://raw.githubusercontent.com/w3ziqv/rustune/v0.5.1/scripts/install.py -o "$work/install.py"
+  https://raw.githubusercontent.com/w3ziqv/rustune/v0.6.0/scripts/install.py -o "$work/install.py"
 python3 "$work/install.py"'
 ```
 
 This installs `rustune` and its matching `rustune-audio` in `~/.local/bin`. The
-installer downloads the archive from the v0.5.1 GitHub Release, checks its
+installer downloads the archive from the v0.6.0 GitHub Release, checks its
 SHA-256 against the value pinned in the installer, and tests both executables
 before switching the active pair. Run `~/.local/bin/rustune doctor` after
 installation. To use the short `rustune` command, put `~/.local/bin` before
@@ -139,7 +139,7 @@ installs that archive in an isolated directory with a mocked download.
 
 ```sh
 release_dir=/absolute/path/to/dist
-asset=rustune-v0.5.1-x86_64-unknown-linux-gnu.tar.gz
+asset=rustune-v0.6.0-x86_64-unknown-linux-gnu.tar.gz
 (cd "$release_dir" && sha256sum -c "$asset.sha256") &&
 RUSTUNE_TEST_PINNED_SHA=1 RUSTUNE_TEST_RELEASE_ARCHIVE="$release_dir/$asset" \
     python3 -B scripts/test-install.py

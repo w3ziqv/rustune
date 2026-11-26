@@ -28,16 +28,33 @@ with tempfile.TemporaryDirectory(prefix='rustune-playlists-') as folder:
         env[key] = str(root/name)
         (root/name/'rustune').mkdir(parents=True, mode=0o700)
     (root/'config/rustune/config.toml').write_text('artwork = false\nlyrics = false\n')
+    # The UI consumes the binding from the real account stamp, even in a mock.
+    token = root / "config/rustune/music-user-token"
+    token.write_text("synthetic-only")
+    token.chmod(0o600)
+    endpoint = root / "run/rustune/service.sock"
+    boot = subprocess.Popen([binary, "daemon"], env=env,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 4
+        while not endpoint.exists() and time.monotonic() < deadline:
+            time.sleep(.02)
+        generation = json.loads(subprocess.check_output([binary, "status"], env=env))["account_generation"]
+        assert generation is not None
+    finally:
+        boot.terminate()
+        boot.wait(timeout=5)
+    assert not endpoint.exists()
     status = {'playback': {'phase': 'stopped'}, 'queue_len': 3, 'queue_revision': 7, 'current': 0,
               'repeat': 'off', 'shuffle': False, 'profile': 'balanced', 'pid': os.getpid(),
               'browser_pid': None, 'backend': 'Synthetic playlist fixture', 'browser_shared': False,
-              'uptime_secs': 0, 'cache_entries': 0, 'message': 'No account or audio', 'sleep_remaining': None}
+              'uptime_secs': 0, 'cache_entries': 0, 'account_generation': generation, 'message': 'No account or audio', 'sleep_remaining': None}
     rows = [{'id': 'p.readonly', 'kind': 'library-playlists', 'title': 'Synthetic readonly', 'provider': 'music', 'storefront': 'pl', 'can_edit': False},
             {'id': 'p.editable', 'kind': 'library-playlists', 'title': 'Synthetic editable', 'provider': 'music', 'storefront': 'pl', 'can_edit': True}]
     writes = []
     stopping = threading.Event()
     listener = socket.socket(socket.AF_UNIX)
-    listener.bind(str(root/'run/rustune/service.sock'))
+    listener.bind(str(endpoint))
     listener.listen(16)
     listener.settimeout(.1)
     def client_work(client):
@@ -56,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix='rustune-playlists-') as folder:
             request = json.loads(read(n))
             command = request['command']
             if command == 'browse':
-                data = {'items': rows, 'next': None, 'storefront': 'pl'}
+                data = {'items': rows, 'next': None, 'storefront': 'pl', 'account_generation': generation}
             else:
                 if command == 'playlist_write':
                     writes.append(request)
@@ -135,6 +152,7 @@ with tempfile.TemporaryDirectory(prefix='rustune-playlists-') as folder:
         assert len(writes) == 1
         args = writes[0]['args']
         assert args['source'] == {'source': 'queue', 'revision': 7}
+        assert args['account_generation'] == generation
         assert args['action'] == {'intent': 'create', 'name': 'Synthetic queue', 'description': ''}
         checks.append('one explicit confirmation emits one complete queue write')
         send(b'q')

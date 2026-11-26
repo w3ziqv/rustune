@@ -4,6 +4,7 @@ pub(super) struct BrowseView {
     album_view: Option<crate::catalog::album::AlbumRef>,
     playlist_view: Option<crate::catalog::playlist::PlaylistRef>,
     playlist_top: usize,
+    list_view: scroll::ListViewport,
     playlist_bytes: usize,
     screen: Screen,
     browse_state: BrowseState,
@@ -20,6 +21,7 @@ pub(super) struct BrowseView {
     previous: Option<String>,
     selected: usize,
     queue_offset: usize,
+    queue_revision: Option<u64>,
     catalog_offset: usize,
 }
 impl BrowseView {
@@ -106,6 +108,9 @@ impl App {
             self.catalog_offset = 0;
             self.playlist_view = None;
             self.playlist_top = 0;
+            self.list_view = Default::default();
+            self.detail_scroll = 0;
+            self.empty_scroll = 0;
             self.playlist_bytes = 0;
             self.browse_state = BrowseState::Idle;
             self.browse_retry = None;
@@ -132,6 +137,7 @@ impl App {
             album_view: self.album_view.clone(),
             playlist_view: self.playlist_view.clone(),
             playlist_top: self.playlist_top,
+            list_view: self.list_view.clone(),
             playlist_bytes: self.playlist_bytes,
             screen: self.screen,
             browse_state: self.browse_state,
@@ -152,6 +158,7 @@ impl App {
             previous: self.previous.clone(),
             selected: self.selected,
             queue_offset: self.queue_offset,
+            queue_revision: self.queue_view_revision,
             catalog_offset: self.catalog_offset,
         });
         self.playlist_bytes = 0;
@@ -164,6 +171,13 @@ impl App {
         self.album_view = view.album_view;
         self.playlist_view = view.playlist_view;
         self.playlist_top = view.playlist_top;
+        self.list_view = view.list_view;
+        self.rows_revision = self.rows_revision.wrapping_add(1);
+        self.nav_top = None;
+        self.detail_scroll = 0;
+        self.empty_scroll = 0;
+        self.queue_request = None;
+        self.queue_retry = None;
         self.playlist_bytes = view.playlist_bytes;
         self.screen = view.screen;
         self.browse_state = view.browse_state;
@@ -175,6 +189,10 @@ impl App {
         self.kind = view.kind;
         self.query = view.query;
         self.items = if view.screen == Screen::Queue {
+            if view.queue_revision != self.status.as_ref().map(|status| status.queue_revision) {
+                self.list_view = Default::default();
+            }
+            self.list_view.forget_placement();
             self.queue_view_revision = None;
             Vec::new()
         } else {
@@ -197,7 +215,9 @@ impl App {
     pub(super) fn checked_queue_edit(&self, index: usize, to: Option<usize>) -> Option<Request> {
         use crate::ipc::QueueAction;
         let row = self.queue_rows.get(index.checked_sub(self.queue_offset)?)?;
-        let revision = self.queue_view_revision?;
+        let revision = self
+            .queue_view_revision
+            .filter(|revision| self.queue_revision_valid(*revision))?;
         let action = if let Some(to) = to {
             QueueAction::MoveBy {
                 entry_id: row.entry_id,
@@ -210,6 +230,14 @@ impl App {
         };
         Some(ipc::queue_action(revision, action))
     }
+    fn queue_revision_valid(&self, revision: u64) -> bool {
+        self.connected
+            && self
+                .status
+                .as_ref()
+                .is_none_or(|status| status.queue_revision == revision)
+    }
+
     pub(super) fn close_queue_actions(&mut self) {
         if self
             .song_actions
@@ -219,7 +247,24 @@ impl App {
             self.song_actions = None;
         }
     }
+    pub(super) fn song_menu_area(&self, area: Rect) -> Option<Rect> {
+        self.song_actions
+            .as_ref()
+            .map(|menu| scroll::centered(area, 80, menu.labels().len() as u16 + 6))
+    }
+
+    pub(super) fn scroll_song_menu(&mut self, direction: Direction) {
+        if let Some(menu) = &mut self.song_actions {
+            menu.selected = direction.step(menu.selected, menu.labels().len() - 1);
+        }
+    }
+
     pub(super) fn open_song_actions(&mut self, track: Track) {
+        if self.screen == Screen::Queue
+            && (!self.connected || self.queue_rows.get(self.selected).is_none())
+        {
+            return;
+        }
         self.song_actions = Some(SongActions {
             track,
             entry_id: if self.screen == Screen::Queue {
@@ -237,24 +282,35 @@ impl App {
         });
     }
     pub(super) fn song_menu_key(&mut self, key: KeyCode) -> (bool, Option<Request>) {
-        let Some(menu) = self.song_actions.as_mut() else {
+        if self.song_actions.is_none() {
             return (false, None);
-        };
+        }
         match key {
             KeyCode::Esc | KeyCode::Left => {
                 self.song_actions = None;
             }
-            KeyCode::Up | KeyCode::Char('k') => menu.selected = menu.selected.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => {
-                menu.selected = (menu.selected + 1).min(menu.labels().len() - 1)
-            }
+            KeyCode::Up | KeyCode::Char('k') => self.scroll_song_menu(Direction::Up),
+            KeyCode::Down | KeyCode::Char('j') => self.scroll_song_menu(Direction::Down),
             KeyCode::Enter | KeyCode::Right => {
                 let menu = self.song_actions.take().expect("song menu exists");
+                if menu.queue_index.is_some()
+                    && (!self.queue_revision_valid(menu.revision)
+                        || self
+                            .queue_view_revision
+                            .is_some_and(|revision| revision != menu.revision))
+                {
+                    self.note = "Queue changed; select the song again".into();
+                    return (false, None);
+                }
                 if menu.selected == 0 {
                     self.remember_view();
                     self.inspected_track = Some(menu.track);
                     self.go(Screen::Lyrics);
                     self.note = "Lyrics preview · playback unchanged".into();
+                } else if menu.queue_index.is_some()
+                    && self.queue_view_revision != Some(menu.revision)
+                {
+                    self.note = "Refresh Queue before editing".into();
                 } else if menu.selected == if menu.queue_index.is_some() { 5 } else { 4 } {
                     let source = if let Some(entry_id) = menu.entry_id {
                         ipc::PlaylistWriteSource::Entry {
@@ -361,6 +417,7 @@ impl App {
     pub(super) fn settings_action(&mut self) -> (bool, Option<Request>) {
         let request = match self.selected {
             0 => {
+                self.dialog_scroll = 0;
                 self.token_input = Some(TokenInput::default());
                 None
             }
@@ -438,8 +495,7 @@ impl App {
         (false, request)
     }
     pub(super) fn render_settings(&self, f: &mut Frame, area: Rect, p: Palette) {
-        let [heading, body] =
-            Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).areas(area);
+        let [heading, body] = self.settings_areas(area);
         f.render_widget(
             Paragraph::new(concat!(
                 "SETTINGS · Rustune v",
@@ -451,7 +507,8 @@ impl App {
             heading,
         );
         let rows = self.settings_rows();
-        let range = visible_range(self.selected, rows.len(), body.height as usize);
+        let range = self.settings_range(body, rows.len());
+        let start = range.start;
         let items = range
             .map(|i| {
                 ListItem::new(format!(
@@ -467,20 +524,19 @@ impl App {
             })
             .collect::<Vec<_>>();
         f.render_widget(List::new(items), body);
+        scroll::indicator(
+            f,
+            body,
+            start,
+            rows.len().saturating_sub(body.height as usize),
+            p,
+        );
     }
     pub(super) fn render_song_menu(&self, f: &mut Frame, p: Palette) {
         let Some(menu) = self.song_actions.as_ref() else {
             return;
         };
-        let size = f.area();
-        let width = size.width.min(80);
-        let height = size.height.min(menu.labels().len() as u16 + 6);
-        let area = Rect::new(
-            size.x + (size.width - width) / 2,
-            size.y + (size.height - height) / 2,
-            width,
-            height,
-        );
+        let area = self.song_menu_area(f.area()).expect("song menu exists");
         f.render_widget(Clear, area);
         let block = Block::bordered()
             .title(" SONG ACTIONS ")
@@ -488,12 +544,7 @@ impl App {
             .padding(Padding::horizontal(1));
         let inner = block.inner(area);
         f.render_widget(block, area);
-        let [title, actions, hint] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Fill(1),
-            Constraint::Length(2),
-        ])
-        .areas(inner);
+        let [title, actions, hint] = scroll::menu_rows(inner);
         f.render_widget(Paragraph::new(menu.track.title.as_str()), title);
         let range = visible_range(menu.selected, menu.labels().len(), actions.height as usize);
         f.render_widget(
@@ -515,6 +566,7 @@ impl App {
             ),
             actions,
         );
-        f.render_widget(Paragraph::new("↑/↓ choose · Enter confirm · Esc back\nPlay uses your saved token and the native CDM"),hint);
+        scroll::indicator(f, actions, menu.selected, menu.labels().len() - 1, p);
+        f.render_widget(Paragraph::new("↑/↓ or wheel · Enter confirm · Esc back\nPlay uses your saved token and the native CDM"),hint);
     }
 }
